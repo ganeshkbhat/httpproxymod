@@ -3,15 +3,139 @@ const https = require('https');
 const { URL } = require('url');
 
 // ============================================================================
+// DEFAULT HANDLERS & STATE
+// ============================================================================
+
+let activeProtocolClient = null;
+
+/**
+ * Default Proxy Handler.
+ * Executes a custom `options.requestHandler` function if provided,
+ * otherwise responds with a hardcoded "hello world" response.
+ *
+ * @param {Object} req - Incoming HTTP request stream (`http.IncomingMessage`).
+ * @param {Object} res - Outgoing HTTP response stream (`http.ServerResponse`).
+ * @param {Object} httpRequestDetails - Parsed HTTP request object.
+ * @param {string} httpRequestDetails.protocol - 'http' or 'https'.
+ * @param {string} httpRequestDetails.url - Incoming request URL path and query string.
+ * @param {string} httpRequestDetails.method - HTTP Method (GET, POST, etc.).
+ * @param {Object} httpRequestDetails.headers - Incoming HTTP request headers.
+ * @param {string} httpRequestDetails.body - Request payload stringified UTF-8 body.
+ * @param {Object} [options={}] - Configuration options.
+ * @param {Function} [options.requestHandler] - Custom request/response handling callback function.
+ * @returns {Promise<any>}
+ */
+const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
+  if (typeof options.requestHandler === 'function') {
+    return await options.requestHandler(req, res, httpRequestDetails, options);
+  }
+
+  res.send("hello world");
+};
+
+/**
+ * HTTP/HTTPS Proxy Handler.
+ * Executes a custom `options.requestHandler` function if provided,
+ * otherwise proxies the request to the target HTTP/HTTPS host using `sendHttpRequest`.
+ * Can be used directly as a request handler or invoked by `proxyToProtocol`.
+ *
+ * @param {Object} req - Incoming HTTP request stream (`http.IncomingMessage`).
+ * @param {Object} res - Outgoing HTTP response stream (`http.ServerResponse`).
+ * @param {Object} httpRequestDetails - Parsed HTTP request object.
+ * @param {string} httpRequestDetails.protocol - 'http' or 'https'.
+ * @param {string} httpRequestDetails.url - Incoming request URL path and query string.
+ * @param {string} httpRequestDetails.method - HTTP Method (GET, POST, etc.).
+ * @param {Object} httpRequestDetails.headers - Incoming HTTP request headers.
+ * @param {string} httpRequestDetails.body - Request payload stringified UTF-8 body.
+ * @param {Object} [options={}] - Configuration options.
+ * @param {Function} [options.requestHandler] - Custom request/response handling callback function.
+ * @param {string} [options.protocolHost='127.0.0.1'] - Target host IP or domain.
+ * @param {number} [options.protocolPort] - Target port.
+ * @param {number} [options.targetPort] - Fallback target port if `protocolPort` is omitted.
+ * @param {boolean} [options.useHttps=false] - Whether target uses HTTPS scheme.
+ * @param {string} [options.protocol='http'] - Target protocol ('http' or 'https').
+ * @returns {Promise<Object>} Resolves with `{ status, headers, body }`
+ */
+const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
+  if (typeof options.requestHandler === 'function') {
+    const handlerResult = await options.requestHandler(req, res, httpRequestDetails, options);
+    if (res && (res.writableEnded || res.finished)) {
+      return handlerResult;
+    }
+  }
+
+  const host = options.protocolHost || '127.0.0.1';
+  const protocolType = (options.protocol || 'http').toLowerCase();
+  const isHttps = Boolean(options.useHttps || protocolType === 'https');
+  const defaultPort = isHttps ? 443 : 80;
+  const port = options.protocolPort || options.targetPort || defaultPort;
+  const scheme = isHttps ? 'https' : 'http';
+
+  const details = httpRequestDetails || (req ? {
+    url: req.url,
+    method: req.method,
+    headers: req.headers,
+    body: ''
+  } : {});
+
+  const targetUrl = `${scheme}://${host}:${port}${details.url || '/'}`;
+
+  try {
+    const proxyRes = await sendHttpRequest({
+      targetUrl: targetUrl,
+      method: details.method || 'GET',
+      headers: details.headers || {},
+      body: details.body || ''
+    });
+
+    if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      const responseBody = typeof proxyRes.body === 'object' && proxyRes.body !== null && !Buffer.isBuffer(proxyRes.body)
+        ? JSON.stringify(proxyRes.body)
+        : proxyRes.body;
+      res.end(responseBody);
+    }
+
+    return {
+      status: proxyRes.statusCode,
+      headers: proxyRes.headers,
+      body: proxyRes.body
+    };
+  } catch (err) {
+    if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+      res.writeHead(504, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'Gateway Timeout / Proxy Request Failed',
+        details: err.message
+      }));
+    }
+    throw err;
+  }
+};
+
+// ============================================================================
 // HTTP / HTTPS SERVER MODULE
 // ============================================================================
 
 /**
  * Standalone Protocol Proxy Handler.
  * Encapsulates creating/using the protocol client based on `options.createClient` or `options.protocol`.
+ * For HTTP and HTTPS protocols, it delegates directly to `httpProxyHandler`.
  *
- * @param {Object} httpRequestDetails - ({ protocol, url, method, headers, body })
- * @param {Object} options - Connection configuration or pre-existing protocol client instance.
+ * @param {Object} httpRequestDetails - Parsed request details.
+ * @param {string} httpRequestDetails.protocol - Request protocol ('http' or 'https').
+ * @param {string} httpRequestDetails.url - Request URL path.
+ * @param {string} httpRequestDetails.method - HTTP method (e.g. 'POST').
+ * @param {Object} httpRequestDetails.headers - Key-value pair of request headers.
+ * @param {string} httpRequestDetails.body - Request payload body string.
+ * @param {Object} [options={}] - Options object.
+ * @param {Object} [options.protocolClient] - Pre-instantiated protocol client instance containing `sendHttpRequestPayload`.
+ * @param {string} [options.protocol='http'] - Target protocol type ('http', 'https', 'tcp', 'socket', 'udp', 'websocket', 'ws', 'wss').
+ * @param {Function} [options.createClient] - Custom client factory function `(clientConfig) => client`.
+ * @param {string} [options.protocolHost='127.0.0.1'] - Destination target host IP or hostname.
+ * @param {number} [options.protocolPort] - Target port for the downstream protocol connection.
+ * @param {Object} [options.protocolCredentials] - Authentication credentials object passed to downstream protocol clients.
+ * @param {boolean} [options.useHttps=false] - If true, forces target protocol scheme to 'https'.
  * @returns {Promise<Object>} Resolves with `{ protocolClient, response: { status, headers, body } }`
  */
 async function proxyToProtocol(httpRequestDetails, options = {}) {
@@ -21,61 +145,49 @@ async function proxyToProtocol(httpRequestDetails, options = {}) {
     protocolClient = options.protocolClient;
   } else {
     const protocolType = (options.protocol || 'http').toLowerCase();
+    const host = options.protocolHost || '127.0.0.1';
+    const port = options.protocolPort;
+    const credentials = options.protocolCredentials;
 
     if (typeof options.createClient === 'function') {
-      // Priority 1: Custom factory function passed by caller
-      protocolClient = options.createClient({
-        host: options.protocolHost || options.tcpHost || options.udpHost || '127.0.0.1',
-        port: options.protocolPort || options.tcpPort || options.udpPort,
-        credentials: options.protocolCredentials || options.tcpCredentials || options.udpCredentials
-      });
-    } else if (protocolType === 'tcp' || protocolType === 'socket') {
-      const { createTcpClient } = require('../proxies/http2tcpproxy/htcp');
-      protocolClient = createTcpClient({
-        host: options.protocolHost || options.tcpHost || '127.0.0.1',
-        port: options.protocolPort || options.tcpPort,
-        credentials: options.protocolCredentials || options.tcpCredentials
-      });
-    } else if (protocolType === 'udp') {
-      const { createUdpClient } = require('../proxies/http2udpproxy/hudp');
-      protocolClient = createUdpClient({
-        host: options.protocolHost || options.udpHost || '127.0.0.1',
-        port: options.protocolPort || options.udpPort,
-        credentials: options.protocolCredentials || options.udpCredentials
-      });
-    } else if (protocolType === 'websocket' || protocolType === 'ws' || protocolType === 'wss') {
-      const { createWsClient } = require('./wsm');
-      protocolClient = createWsClient({
-        host: options.protocolHost || options.wsHost || '127.0.0.1',
-        port: options.protocolPort || options.wsPort,
-        credentials: options.protocolCredentials || options.wsCredentials,
-        useSsl: protocolType === 'wss'
-      });
-    } else if (protocolType === 'http' || protocolType === 'https') {
-      // Default / HTTP-to-HTTP Passthrough Adapter
-      protocolClient = {
-        sendHttpRequestPayload: async (details) => {
-          const targetHost = options.protocolHost || options.targetHost || '127.0.0.1';
-          const targetPort = options.protocolPort || options.targetPort || 80;
-          const targetProtocol = options.useHttps || protocolType === 'https' ? 'https' : 'http';
-          const targetUrl = `${targetProtocol}://${targetHost}:${targetPort}${details.url}`;
-
-          const res = await sendHttpRequest({
-            targetUrl: targetUrl,
-            method: details.method,
-            headers: details.headers,
-            body: details.body
-          });
-
-          return {
-            status: res.statusCode,
-            headers: res.headers,
-            body: res.body
-          };
-        }
-      };
+      protocolClient = options.createClient({ host, port, credentials });
     } else {
-      throw new Error(`Unsupported protocol type: ${options.protocol}`);
+      switch (protocolType) {
+        case 'tcp':
+        case 'socket': {
+          const { createTcpClient } = require('../proxies/http2tcpproxy/htcp');
+          protocolClient = createTcpClient({ host, port, credentials });
+          break;
+        }
+        case 'udp': {
+          const { createUdpClient } = require('../proxies/http2udpproxy/hudp');
+          protocolClient = createUdpClient({ host, port, credentials });
+          break;
+        }
+        case 'websocket':
+        case 'ws':
+        case 'wss': {
+          const { createWsClient } = require('./wsm');
+          protocolClient = createWsClient({
+            host,
+            port,
+            credentials,
+            useSsl: protocolType === 'wss'
+          });
+          break;
+        }
+        case 'http':
+        case 'https': {
+          protocolClient = {
+            sendHttpRequestPayload: async (details) => {
+              return await httpProxyHandler(null, null, details, options);
+            }
+          };
+          break;
+        }
+        default:
+          throw new Error(`Unsupported protocol type: ${options.protocol}`);
+      }
     }
   }
 
@@ -106,18 +218,45 @@ async function proxyToProtocol(httpRequestDetails, options = {}) {
 
 /**
  * Creates the HTTP/HTTPS request handler function.
- * Completely decouples web server protocol handling from the underlying proxy implementation.
+ * Decouples web server protocol handling from the underlying proxy implementation.
  *
- * @param {Function} proxyHandler - Callback function responsible for executing proxy logic.
- * @param {Object} options - Options containing authenticate hook, proxy params, and protocol flags.
- * @param {Function} setProtocolClient - Callback to register the active protocol client.
+ * @param {Object} [options={}] - Options object.
+ * @param {Function|any} [options.authenticate] - Authentication hook `(httpRequestDetails) => boolean|Promise<boolean>`.
+ * @param {boolean} [options.useHttps=false] - Sets request protocol to 'https' if true.
+ * @param {string|Buffer} [options.key] - TLS private key.
+ * @param {string|Buffer} [options.cert] - TLS certificate.
+ * @param {string} [options.protocol] - Target protocol. If omitted, `defaultProxyHandler` is used.
+ * @param {Function} [setProtocolClient] - Callback to register the active protocol client instance `(client) => void`.
+ * @param {Function} [proxyHandler] - Custom proxy execution function. Defaults to `defaultProxyHandler` if protocol is not specified.
  * @returns {Function} Standard Node.js `(req, res)` HTTP request listener.
  */
-function createRequestHandler(proxyHandler, options, setProtocolClient) {
-  const authenticate = options.authenticate;
+function createRequestHandler(options = {}, setProtocolClient = (client) => {
+    activeProtocolClient = client;
+  }, proxyHandler) {
+  const authenticate = options.authenticate !== undefined
+    ? options.authenticate
+    : ((httpRequestDetails) => true);
+
   const protocol = options.useHttps || (options.key && options.cert) ? 'https' : 'http';
+  
+  // If protocol is not specified, defaultProxyHandler is the default function
+  const handler = proxyHandler || (options.protocol ? proxyToProtocol : defaultProxyHandler);
 
   return (req, res) => {
+    if (typeof res.send !== 'function') {
+      res.send = (data) => {
+        if (!res.headersSent) {
+          if (typeof data === 'object' && data !== null && !Buffer.isBuffer(data)) {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            data = JSON.stringify(data);
+          } else {
+            res.writeHead(200, { 'content-type': 'text/plain' });
+          }
+        }
+        res.end(data);
+      };
+    }
+
     const bodyChunks = [];
 
     req.on('data', (chunk) => {
@@ -136,47 +275,86 @@ function createRequestHandler(proxyHandler, options, setProtocolClient) {
       };
 
       // Step 1: Execute HTTP Server Authentication Hook
-      if (typeof authenticate === 'function') {
-        const isAllowed = await authenticate(httpRequestDetails);
-        if (!isAllowed) {
-          res.writeHead(401, { 'content-type': 'application/json' });
-          return res.end(JSON.stringify({
-            error: 'Unauthorized: HTTP Server custom authentication failed'
-          }));
-        }
+      if (typeof authenticate !== 'function') {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({
+          error: 'Unauthorized: Authentication handler is not a function'
+        }));
       }
 
-      // Step 2: Delegate to generic proxy handler
-      const proxyResult = await proxyHandler(httpRequestDetails, options);
+      const isAllowed = await authenticate(httpRequestDetails);
+      if (!isAllowed) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({
+          error: 'Unauthorized: HTTP Server custom authentication failed'
+        }));
+      }
+
+      // Step 2: Delegate to proxy handler
+      let proxyResult;
+      if (handler === proxyToProtocol) {
+        proxyResult = await handler(httpRequestDetails, options);
+      } else {
+        proxyResult = await handler(req, res, httpRequestDetails, options);
+      }
+
+      if (res.writableEnded || res.finished) {
+        return;
+      }
+
       if (proxyResult && proxyResult.protocolClient) {
         setProtocolClient(proxyResult.protocolResult || proxyResult.protocolClient);
       }
 
-      // Step 3: Dispatch final response stream back to HTTP Client
-      const response = proxyResult.response || { status: 500, headers: {}, body: 'Internal Server Error' };
+      // Step 3: Dispatch final response stream back to HTTP Client if not already sent
+      const response = proxyResult && proxyResult.response
+        ? proxyResult.response
+        : { status: 500, headers: {}, body: 'Internal Server Error' };
+
+      let responseBody = response.body;
+      if (typeof responseBody === 'object' && responseBody !== null && !Buffer.isBuffer(responseBody)) {
+        responseBody = JSON.stringify(responseBody);
+      }
+
       res.writeHead(response.status, response.headers);
-      res.end(response.body);
+      res.end(responseBody);
     });
   };
 }
 
 /**
- * Creates and starts an HTTP or HTTPS Reverse Proxy Server.
+ * Creates and starts an HTTP or HTTPS Server.
+ * If `options.protocol` is not specified, `defaultProxyHandler` is used by default to manage requests.
  *
- * @param {Object} [options={}] - Options.
- * @param {Function} [proxyHandler=proxyToProtocol] - Optional custom proxy function.
- * @returns {Object} `{ server, getProtocolClient: Function }`
+ * @param {Object} [options={}] - Options configuration object.
+ * @param {number} [options.port=8080] - Server port to listen on.
+ * @param {number} [options.httpPort] - Alternate server port option taking precedence over `options.port`.
+ * @param {boolean} [options.useHttps=false] - Whether to instantiate an HTTPS server.
+ * @param {string|Buffer} [options.key] - Private key for HTTPS.
+ * @param {string|Buffer} [options.cert] - Cert chain for HTTPS.
+ * @param {string|Buffer|Array} [options.ca] - CA cert authority overrides.
+ * @param {string|Buffer} [options.pfx] - PFX file content.
+ * @param {string} [options.passphrase] - Passphrase for private key or PFX.
+ * @param {Function|any} [options.authenticate] - Authentication hook function.
+ * @param {Function} [options.requestHandler] - Custom handler executed within `defaultProxyHandler` / `httpProxyHandler`.
+ * @param {Object} [options.protocolClient] - Pre-existing protocol client instance.
+ * @param {string} [options.protocol] - Target forwarding protocol type.
+ * @param {string} [options.protocolHost='127.0.0.1'] - Downstream host IP/Domain.
+ * @param {number} [options.protocolPort] - Downstream port.
+ * @param {Object} [options.protocolCredentials] - Downstream credentials object.
+ * @param {Function} [proxyHandler] - Custom handler responsible for request execution.
+ * @returns {Object} `{ server: http.Server|https.Server, getProtocolClient: Function }`
  */
-function createHttpServer(options = {}, proxyHandler = proxyToProtocol) {
+function createHttpServer(options = {}, proxyHandler) {
   const port = options.httpPort || options.port || 8080;
   const isHttps = Boolean(options.useHttps || (options.key && options.cert));
 
-  let activeProtocolClient = options.protocolClient || null;
-  const setProtocolClient = (client) => {
-    activeProtocolClient = client;
-  };
+  let localActiveProtocolClient = options.protocolClient || null;
 
-  const requestHandler = createRequestHandler(proxyHandler, options, setProtocolClient);
+  const requestHandler = createRequestHandler(options, (client) => {
+    localActiveProtocolClient = client;
+    activeProtocolClient = client;
+  }, proxyHandler);
 
   let server;
   if (isHttps) {
@@ -199,7 +377,7 @@ function createHttpServer(options = {}, proxyHandler = proxyToProtocol) {
 
   return {
     server: server,
-    getProtocolClient: () => activeProtocolClient
+    getProtocolClient: () => localActiveProtocolClient
   };
 }
 
@@ -210,14 +388,14 @@ function createHttpServer(options = {}, proxyHandler = proxyToProtocol) {
 /**
  * Sends an HTTP/HTTPS request to Target HTTP Server B.
  * 
- * @param {Object} options - Request configuration.
- * @param {string} options.targetUrl - Full destination URL (e.g., http://localhost:8080/api).
- * @param {string} [options.method='POST'] - HTTP Method.
- * @param {Object} [options.headers={}] - HTTP Request Headers.
- * @param {string|Buffer|Object} [options.body=''] - Payload body to send.
- * @param {number} [options.timeout=5000] - Request timeout in ms.
- * @param {boolean} [options.rejectUnauthorized=true] - TLS cert enforcement flag.
- * @returns {Promise<Object>} Resolves with { statusCode, headers, body }
+ * @param {Object} options - Request configuration options.
+ * @param {string} options.targetUrl - Required full destination URL (e.g., 'http://127.0.0.1:8080/api').
+ * @param {string} [options.method='POST'] - HTTP method (e.g., 'GET', 'POST', 'PUT', 'DELETE').
+ * @param {Object} [options.headers={}] - HTTP headers object.
+ * @param {string|Buffer|Object} [options.body=''] - Request body payload.
+ * @param {number} [options.timeout=5000] - Connection timeout in milliseconds.
+ * @param {boolean} [options.rejectUnauthorized=true] - If false, accepts self-signed TLS/SSL certs.
+ * @returns {Promise<Object>} Resolves with `{ statusCode: number, headers: Object, body: Object|string }`
  */
 function sendHttpRequest(options) {
   return new Promise((resolve, reject) => {
@@ -237,7 +415,7 @@ function sendHttpRequest(options) {
     const parsedUrl = new URL(targetUrl);
     const transport = parsedUrl.protocol === 'https:' ? https : http;
 
-    const payload = typeof body === 'object' && !Buffer.isBuffer(body)
+    const payload = typeof body === 'object' && body !== null && !Buffer.isBuffer(body)
       ? JSON.stringify(body)
       : body;
 
@@ -309,5 +487,7 @@ module.exports = {
   createHttpServer: createHttpServer,
   createRequestHandler: createRequestHandler,
   proxyToProtocol: proxyToProtocol,
+  defaultProxyHandler: defaultProxyHandler,
+  httpProxyHandler: httpProxyHandler,
   sendHttpRequest: sendHttpRequest
 };
