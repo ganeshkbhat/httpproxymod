@@ -384,7 +384,6 @@ function createHttpServer(options = {}, proxyHandler) {
 // ============================================================================
 // HTTP / HTTPS CLIENT MODULE
 // ============================================================================
-
 /**
  * Sends an HTTP/HTTPS request to Target HTTP Server B.
  * 
@@ -467,8 +466,7 @@ function sendHttpRequest(options) {
     });
 
     req.on('timeout', () => {
-      req.destroy();
-      reject(new Error(`HTTP Request timed out after ${timeout}ms`));
+      req.destroy(new Error(`HTTP Request timed out after ${timeout}ms`));
     });
 
     req.on('error', (err) => {
@@ -482,7 +480,6 @@ function sendHttpRequest(options) {
     req.end();
   });
 }
-
 module.exports = {
   createHttpServer: createHttpServer,
   createRequestHandler: createRequestHandler,

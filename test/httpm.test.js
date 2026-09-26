@@ -1,7 +1,5 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const http = require('http');
-const https = require('https');
 const { createHttpServer, sendHttpRequest } = require('../httpm');
 
 describe('httpm Module - createHttpServer & sendHttpRequest', function () {
@@ -97,9 +95,7 @@ describe('httpm Module - createHttpServer & sendHttpRequest', function () {
     it('should handle request timeout and reject with error', async function () {
       targetServerInfo = createHttpServer({
         port: TARGET_PORT,
-        requestHandler: async (req, res) => {
-          // Intentionally do not respond to force a timeout
-        }
+        requestHandler: () => new Promise(() => {}) // Never resolves to force client timeout
       });
 
       try {
@@ -115,6 +111,90 @@ describe('httpm Module - createHttpServer & sendHttpRequest', function () {
   });
 
   describe('createHttpServer', function () {
+    it('should respond with default "hello world" when protocol is not specified', async function () {
+      proxyServerInfo = createHttpServer({
+        port: PROXY_PORT
+      });
+
+      const response = await sendHttpRequest({
+        targetUrl: `http://127.0.0.1:${PROXY_PORT}/`,
+        method: 'GET'
+      });
+
+      expect(response.statusCode).to.equal(200);
+      expect(response.body).to.equal('hello world');
+    });
+
+    it('should execute custom requestHandler when protocol is not specified', async function () {
+      proxyServerInfo = createHttpServer({
+        port: PROXY_PORT,
+        requestHandler: async (req, res, httpRequestDetails) => {
+          res.send({ customResponse: true });
+        }
+      });
+
+      const response = await sendHttpRequest({
+        targetUrl: `http://127.0.0.1:${PROXY_PORT}/custom`,
+        method: 'GET'
+      });
+
+      expect(response.statusCode).to.equal(200);
+      expect(response.body).to.deep.equal({ customResponse: true });
+    });
+
+    it('should proxy request to target HTTP server when protocol is set to "http"', async function () {
+      targetServerInfo = createHttpServer({
+        port: TARGET_PORT,
+        requestHandler: async (req, res, httpRequestDetails) => {
+          res.send({
+            message: 'Hello from target HTTP server!',
+            path: httpRequestDetails.url,
+            receivedData: httpRequestDetails.body ? JSON.parse(httpRequestDetails.body) : null
+          });
+        }
+      });
+
+      proxyServerInfo = createHttpServer({
+        port: PROXY_PORT,
+        protocol: 'http',
+        protocolHost: '127.0.0.1',
+        protocolPort: TARGET_PORT
+      });
+
+      const response = await sendHttpRequest({
+        targetUrl: `http://127.0.0.1:${PROXY_PORT}/api/proxy-test`,
+        method: 'POST',
+        body: { action: 'proxy_ping' }
+      });
+
+      expect(response.statusCode).to.equal(200);
+      expect(response.body).to.deep.equal({
+        message: 'Hello from target HTTP server!',
+        path: '/api/proxy-test',
+        receivedData: { action: 'proxy_ping' }
+      });
+    });
+
+    it('should execute custom proxyHandler passed as the second parameter', async function () {
+      const customProxyHandler = sinon.spy(async (req, res, httpRequestDetails) => {
+        res.send({ handledByCustomProxyHandler: true });
+      });
+
+      proxyServerInfo = createHttpServer(
+        { port: PROXY_PORT },
+        customProxyHandler
+      );
+
+      const response = await sendHttpRequest({
+        targetUrl: `http://127.0.0.1:${PROXY_PORT}/test`,
+        method: 'GET'
+      });
+
+      expect(response.statusCode).to.equal(200);
+      expect(response.body).to.deep.equal({ handledByCustomProxyHandler: true });
+      expect(customProxyHandler.calledOnce).to.be.true;
+    });
+
     it('should enforce authentication hook and return 401 when rejected', async function () {
       const authSpy = sinon.spy(async (details) => {
         return details.headers['authorization'] === 'Bearer secret-token';
@@ -166,41 +246,12 @@ describe('httpm Module - createHttpServer & sendHttpRequest', function () {
       expect(response.body.error).to.include('Authentication handler is not a function');
     });
 
-    it('should proxy requests through proxyServer to targetServer using defaultProxyHandler', async function () {
-      targetServerInfo = createHttpServer({
-        port: TARGET_PORT,
-        requestHandler: async (req, res, httpRequestDetails) => {
-          res.send({
-            proxied: true,
-            path: httpRequestDetails.url,
-            data: httpRequestDetails.body ? JSON.parse(httpRequestDetails.body) : null
-          });
-        }
-      });
-
-      proxyServerInfo = createHttpServer({
-        port: PROXY_PORT,
-        protocolHost: '127.0.0.1',
-        protocolPort: TARGET_PORT
-      });
-
-      const response = await sendHttpRequest({
-        targetUrl: `http://127.0.0.1:${PROXY_PORT}/api/v1/resource`,
-        method: 'POST',
-        body: { hello: 'world' }
-      });
-
-      expect(response.statusCode).to.equal(200);
-      expect(response.body.proxied).to.be.true;
-      expect(response.body.path).to.equal('/api/v1/resource');
-      expect(response.body.data).to.deep.equal({ hello: 'world' });
-    });
-
     it('should return 504 Gateway Timeout if proxy destination is unreachable', async function () {
       const UNREACHABLE_PORT = 9999;
 
       proxyServerInfo = createHttpServer({
         port: PROXY_PORT,
+        protocol: 'http',
         protocolHost: '127.0.0.1',
         protocolPort: UNREACHABLE_PORT
       });
@@ -211,7 +262,7 @@ describe('httpm Module - createHttpServer & sendHttpRequest', function () {
       });
 
       expect(response.statusCode).to.equal(504);
-      expect(response.body.error).to.include('Gateway Timeout / Proxy Request Failed');
+      expect(response.body.error).to.include('Gateway Timeout / Protocol Forwarding Failed');
     });
   });
 });
