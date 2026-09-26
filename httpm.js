@@ -36,7 +36,7 @@ const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) =
 /**
  * HTTP/HTTPS Proxy Handler.
  * Executes a custom `options.requestHandler` function if provided,
- * otherwise proxies the request to the target HTTP/HTTPS host using `createHttpClient`.
+ * otherwise proxies the request to the target HTTP/HTTPS host using `sendHttpRequest`.
  * Can be used directly as a request handler or invoked by `proxyToProtocol`.
  *
  * @param {Object} req - Incoming HTTP request stream (`http.IncomingMessage`).
@@ -79,10 +79,9 @@ const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
   } : {});
 
   const targetUrl = `${scheme}://${host}:${port}${details.url || '/'}`;
-  const client = createHttpClient(options);
 
   try {
-    const proxyRes = await client.sendHttpRequest({
+    const proxyRes = await sendHttpRequest({
       targetUrl: targetUrl,
       method: details.method || 'GET',
       headers: details.headers || {},
@@ -121,7 +120,6 @@ const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
 /**
  * Standalone Protocol Proxy Handler.
  * Encapsulates creating/using the protocol client based on `options.createClient` or `options.protocol`.
- * For HTTP and HTTPS protocols, it delegates directly to `createHttpClient`.
  *
  * @param {Object} httpRequestDetails - Parsed request details.
  * @param {string} httpRequestDetails.protocol - Request protocol ('http' or 'https').
@@ -179,7 +177,28 @@ async function proxyToProtocol(httpRequestDetails, options = {}) {
         }
         case 'http':
         case 'https': {
-          protocolClient = createHttpClient(options);
+          protocolClient = {
+            sendHttpRequestPayload: async (details) => {
+              const isHttps = Boolean(options.useHttps || protocolType === 'https');
+              const defaultPort = isHttps ? 443 : 80;
+              const targetPort = port || options.targetPort || defaultPort;
+              const scheme = isHttps ? 'https' : 'http';
+              const targetUrl = details.targetUrl || `${scheme}://${host}:${targetPort}${details.url || '/'}`;
+
+              const res = await sendHttpRequest({
+                targetUrl: targetUrl,
+                method: details.method || 'GET',
+                headers: details.headers || {},
+                body: details.body || ''
+              });
+
+              return {
+                status: res.statusCode,
+                headers: res.headers,
+                body: res.body
+              };
+            }
+          };
           break;
         }
         default:
@@ -383,149 +402,104 @@ function createHttpServer(options = {}, proxyHandler) {
 // ============================================================================
 
 /**
- * Creates an HTTP/HTTPS Client instance with `sendHttpRequest` and `sendHttpRequestPayload`.
- *
- * @param {Object} [clientOptions={}] - Default options for the HTTP client instance.
- * @returns {Object} Client instance object `{ sendHttpRequest: Function, sendHttpRequestPayload: Function }`
+ * Sends an HTTP/HTTPS request to Target HTTP Server B.
+ * 
+ * @param {Object} options - Request configuration options.
+ * @param {string} options.targetUrl - Required full destination URL (e.g., 'http://127.0.0.1:8080/api').
+ * @param {string} [options.method='POST'] - HTTP method (e.g., 'GET', 'POST', 'PUT', 'DELETE').
+ * @param {Object} [options.headers={}] - HTTP headers object.
+ * @param {string|Buffer|Object} [options.body=''] - Request body payload.
+ * @param {number} [options.timeout=5000] - Connection timeout in milliseconds.
+ * @param {boolean} [options.rejectUnauthorized=true] - If false, accepts self-signed TLS/SSL certs.
+ * @returns {Promise<Object>} Resolves with `{ statusCode: number, headers: Object, body: Object|string }`
  */
-function createHttpClient(clientOptions = {}) {
-  const sendHttpRequest = (options = {}) => {
-    return new Promise((resolve, reject) => {
-      const mergedOptions = {
-        timeout: 5000,
-        rejectUnauthorized: true,
-        ...clientOptions,
-        ...options,
-        headers: {
-          ...(clientOptions.headers || {}),
-          ...(options.headers || {})
-        }
-      };
+function sendHttpRequest(options = {}) {
+  return new Promise((resolve, reject) => {
+    const {
+      targetUrl,
+      method = 'POST',
+      headers = {},
+      body = '',
+      timeout = 5000,
+      rejectUnauthorized = true
+    } = options;
 
-      const {
-        targetUrl,
-        method = 'POST',
-        headers = {},
-        body = '',
-        timeout = 5000,
-        rejectUnauthorized = true
-      } = mergedOptions;
+    if (!targetUrl) {
+      return reject(new Error('Target URL is required for sendHttpRequest'));
+    }
 
-      if (!targetUrl) {
-        return reject(new Error('Target URL is required for sendHttpRequest'));
-      }
+    const parsedUrl = new URL(targetUrl);
+    const transport = parsedUrl.protocol === 'https:' ? https : http;
 
-      const parsedUrl = new URL(targetUrl);
-      const transport = parsedUrl.protocol === 'https:' ? https : http;
+    const payload = typeof body === 'object' && body !== null && !Buffer.isBuffer(body)
+      ? JSON.stringify(body)
+      : body;
 
-      const payload = typeof body === 'object' && body !== null && !Buffer.isBuffer(body)
-        ? JSON.stringify(body)
-        : body;
-
-      const reqHeaders = {
-        ...headers
-      };
-
-      if (payload && !reqHeaders['Content-Type'] && !reqHeaders['content-type']) {
-        reqHeaders['Content-Type'] = 'application/json';
-      }
-
-      if (payload) {
-        reqHeaders['Content-Length'] = Buffer.byteLength(payload);
-      }
-
-      const requestOptions = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: method,
-        headers: reqHeaders,
-        timeout: timeout,
-        rejectUnauthorized: rejectUnauthorized
-      };
-
-      const req = transport.request(requestOptions, (res) => {
-        let responseData = [];
-
-        res.on('data', (chunk) => {
-          responseData.push(chunk);
-        });
-
-        res.on('end', () => {
-          const responseBuffer = Buffer.concat(responseData);
-          let parsedBody = responseBuffer.toString('utf8');
-
-          try {
-            parsedBody = JSON.parse(parsedBody);
-          } catch (e) {
-            // Keep as string if not valid JSON
-          }
-
-          resolve({
-            statusCode: res.statusCode,
-            headers: res.headers,
-            body: parsedBody
-          });
-        });
-      });
-
-      req.on('timeout', () => {
-        req.destroy(new Error(`HTTP Request timed out after ${timeout}ms`));
-      });
-
-      req.on('error', (err) => {
-        reject(err);
-      });
-
-      if (payload) {
-        req.write(payload);
-      }
-
-      req.end();
-    });
-  };
-
-  const sendHttpRequestPayload = async (details = {}) => {
-    const isHttps = Boolean(clientOptions.useHttps || (clientOptions.protocol || '').toLowerCase() === 'https');
-    const defaultPort = isHttps ? 443 : 80;
-    const host = clientOptions.protocolHost || '127.0.0.1';
-    const port = clientOptions.protocolPort || clientOptions.targetPort || defaultPort;
-    const scheme = isHttps ? 'https' : 'http';
-    const targetUrl = details.targetUrl || `${scheme}://${host}:${port}${details.url || '/'}`;
-
-    const res = await sendHttpRequest({
-      targetUrl: targetUrl,
-      method: details.method || 'GET',
-      headers: details.headers || {},
-      body: details.body || ''
-    });
-
-    return {
-      status: res.statusCode,
-      headers: res.headers,
-      body: res.body
+    const reqHeaders = {
+      ...headers
     };
-  };
 
-  return {
-    sendHttpRequest: sendHttpRequest,
-    sendHttpRequestPayload: sendHttpRequestPayload
-  };
-}
+    if (payload && !reqHeaders['Content-Type'] && !reqHeaders['content-type']) {
+      reqHeaders['Content-Type'] = 'application/json';
+    }
 
-/**
- * Helper function to make direct HTTP requests using createHttpClient.
- *
- * @param {Object} options - Request options.
- * @returns {Promise<Object>}
- */
-function sendHttpRequest(options) {
-  return createHttpClient().sendHttpRequest(options);
+    if (payload) {
+      reqHeaders['Content-Length'] = Buffer.byteLength(payload);
+    }
+
+    const requestOptions = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: method,
+      headers: reqHeaders,
+      timeout: timeout,
+      rejectUnauthorized: rejectUnauthorized
+    };
+
+    const req = transport.request(requestOptions, (res) => {
+      let responseData = [];
+
+      res.on('data', (chunk) => {
+        responseData.push(chunk);
+      });
+
+      res.on('end', () => {
+        const responseBuffer = Buffer.concat(responseData);
+        let parsedBody = responseBuffer.toString('utf8');
+
+        try {
+          parsedBody = JSON.parse(parsedBody);
+        } catch (e) {
+          // Keep as string if not valid JSON
+        }
+
+        resolve({
+          statusCode: res.statusCode,
+          headers: res.headers,
+          body: parsedBody
+        });
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`HTTP Request timed out after ${timeout}ms`));
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    if (payload) {
+      req.write(payload);
+    }
+
+    req.end();
+  });
 }
 
 module.exports = {
   createHttpServer: createHttpServer,
-  createHttpClient: createHttpClient,
   createRequestHandler: createRequestHandler,
   proxyToProtocol: proxyToProtocol,
   defaultProxyHandler: defaultProxyHandler,
