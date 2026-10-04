@@ -1,4 +1,4 @@
-const { createHttpServer } = require('../httpm');
+const { createHttpServer } = require('../index');
 
 const proxyServerInfo = createHttpServer({
   port: 8080,

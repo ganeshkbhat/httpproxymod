@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { createHttpServer, sendHttpRequest } = require('../httpm');
+const { createHttpServer, sendHttpRequest } = require('../index');
 
 describe('httpm Module - createHttpServer & sendHttpRequest', function () {
   let targetServerInfo;

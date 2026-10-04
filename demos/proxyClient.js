@@ -1,4 +1,4 @@
-const { sendHttpRequest } = require('../httpm');
+const { sendHttpRequest } = require('http-requests-proxy');
 
 async function runClient() {
   console.log('--- Test 1: Direct HTTP Request to Target Server ---');

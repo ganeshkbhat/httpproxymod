@@ -1,6 +1,6 @@
 const http = require('http');
 const https = require('https');
-const { URL } = require('url');
+const { sendHttpRequest } = require('http-requests-proxy');
 
 // ============================================================================
 // DEFAULT HANDLERS & STATE
@@ -395,107 +395,6 @@ function createHttpServer(options = {}, proxyHandler) {
     server: server,
     getProtocolClient: () => localActiveProtocolClient
   };
-}
-
-// ============================================================================
-// HTTP / HTTPS CLIENT MODULE
-// ============================================================================
-
-/**
- * Sends an HTTP/HTTPS request to Target HTTP Server B.
- * 
- * @param {Object} options - Request configuration options.
- * @param {string} options.targetUrl - Required full destination URL (e.g., 'http://127.0.0.1:8080/api').
- * @param {string} [options.method='POST'] - HTTP method (e.g., 'GET', 'POST', 'PUT', 'DELETE').
- * @param {Object} [options.headers={}] - HTTP headers object.
- * @param {string|Buffer|Object} [options.body=''] - Request body payload.
- * @param {number} [options.timeout=5000] - Connection timeout in milliseconds.
- * @param {boolean} [options.rejectUnauthorized=true] - If false, accepts self-signed TLS/SSL certs.
- * @returns {Promise<Object>} Resolves with `{ statusCode: number, headers: Object, body: Object|string }`
- */
-function sendHttpRequest(options = {}) {
-  return new Promise((resolve, reject) => {
-    const {
-      targetUrl,
-      method = 'POST',
-      headers = {},
-      body = '',
-      timeout = 5000,
-      rejectUnauthorized = true
-    } = options;
-
-    if (!targetUrl) {
-      return reject(new Error('Target URL is required for sendHttpRequest'));
-    }
-
-    const parsedUrl = new URL(targetUrl);
-    const transport = parsedUrl.protocol === 'https:' ? https : http;
-
-    const payload = typeof body === 'object' && body !== null && !Buffer.isBuffer(body)
-      ? JSON.stringify(body)
-      : body;
-
-    const reqHeaders = {
-      ...headers
-    };
-
-    if (payload && !reqHeaders['Content-Type'] && !reqHeaders['content-type']) {
-      reqHeaders['Content-Type'] = 'application/json';
-    }
-
-    if (payload) {
-      reqHeaders['Content-Length'] = Buffer.byteLength(payload);
-    }
-
-    const requestOptions = {
-      hostname: parsedUrl.hostname,
-      port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-      path: parsedUrl.pathname + parsedUrl.search,
-      method: method,
-      headers: reqHeaders,
-      timeout: timeout,
-      rejectUnauthorized: rejectUnauthorized
-    };
-
-    const req = transport.request(requestOptions, (res) => {
-      let responseData = [];
-
-      res.on('data', (chunk) => {
-        responseData.push(chunk);
-      });
-
-      res.on('end', () => {
-        const responseBuffer = Buffer.concat(responseData);
-        let parsedBody = responseBuffer.toString('utf8');
-
-        try {
-          parsedBody = JSON.parse(parsedBody);
-        } catch (e) {
-          // Keep as string if not valid JSON
-        }
-
-        resolve({
-          statusCode: res.statusCode,
-          headers: res.headers,
-          body: parsedBody
-        });
-      });
-    });
-
-    req.on('timeout', () => {
-      req.destroy(new Error(`HTTP Request timed out after ${timeout}ms`));
-    });
-
-    req.on('error', (err) => {
-      reject(err);
-    });
-
-    if (payload) {
-      req.write(payload);
-    }
-
-    req.end();
-  });
 }
 
 module.exports = {

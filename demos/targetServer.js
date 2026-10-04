@@ -1,4 +1,4 @@
-const { createHttpServer } = require('../httpm');
+const { createHttpServer } = require('../index');
 
 const targetServerInfo = createHttpServer({
   port: 9000,
