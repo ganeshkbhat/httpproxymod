@@ -1,6 +1,6 @@
 const tls = require('tls');
 const { createHttpServer } = require('../index');
-const { generateSelfSignedCert } = require('../index');
+const { getOrGenerateSelfSignedCert } = require('../index');
 const { frameMessage, parseFrames } = require('../index');
 
 const PROXY_PORT = 8003;
@@ -81,7 +81,7 @@ const requestHandler = (req, res) => {
 
 function startProxyServer() {
   try {
-    const certs = generateSelfSignedCert();
+    const certs = getOrGenerateSelfSignedCert();
     const { server: proxyServer } = createHttpServer({
       port: PROXY_PORT,
       key: certs.key,

@@ -1,7 +1,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { createHttpServer } = require('../index');
-const { generateSelfSignedCert } = require('../index');
+const { getOrGenerateSelfSignedCert } = require('../index');
 
 const PROXY_PORT = 8004;
 const TARGET_PORT = 9004;
@@ -14,7 +14,7 @@ const TARGET_PORT = 9004;
  */
 function buildMaskedWsFrame(payloadBuffer) {
   const payloadLength = payloadBuffer.length;
-  let headerLength = 6; // 2 bytes header + 4 bytes mask key
+  let headerLength = 6;
   let extendedLenBytes = 0;
 
   if (payloadLength > 125 && payloadLength <= 65535) {
@@ -24,7 +24,7 @@ function buildMaskedWsFrame(payloadBuffer) {
   }
 
   const frame = Buffer.alloc(headerLength + extendedLenBytes + payloadLength);
-  frame[0] = 0x81; // FIN + Text frame
+  frame[0] = 0x81;
 
   let maskOffset = 2;
   if (extendedLenBytes === 0) {
@@ -194,7 +194,7 @@ const requestHandler = (req, res) => {
 
 function startProxyServer() {
   try {
-    const certs = generateSelfSignedCert();
+    const certs = getOrGenerateSelfSignedCert();
     const { server: proxyServer } = createHttpServer({
       port: PROXY_PORT,
       key: certs.key,

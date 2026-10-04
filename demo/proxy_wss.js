@@ -1,7 +1,7 @@
 const https = require('https');
 const crypto = require('crypto');
 const { createHttpServer, clients } = require('../index');
-const { generateSelfSignedCert } = require('../index');
+const { getOrGenerateSelfSignedCert } = require('../index');
 
 const PROXY_PORT = 8005;
 const TARGET_PORT = 9005;
@@ -224,9 +224,8 @@ const requestHandler = (req, res) => {
 
 function startProxyServer() {
   try {
-    const certs = generateSelfSignedCert();
+    const certs = getOrGenerateSelfSignedCert();
 
-    // Create HTTPS server wrapper via createHttpServer options
     const proxyServerWrapper = createHttpServer({
       port: PROXY_PORT,
       useHttps: true,

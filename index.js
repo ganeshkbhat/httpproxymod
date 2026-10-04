@@ -127,6 +127,37 @@ function generateSelfSignedCert() {
   };
 }
 
+function getOrGenerateSelfSignedCert() {
+  const args = process.argv.slice(2);
+  let keyPath = null;
+  let certPath = null;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-key' || arg === '--key') {
+      keyPath = args[i + 1];
+    } else if (arg.startsWith('-key=') || arg.startsWith('--key=')) {
+      keyPath = arg.split('=')[1];
+    } else if (arg === '-cert' || arg === '--cert') {
+      certPath = args[i + 1];
+    } else if (arg.startsWith('-cert=') || arg.startsWith('--cert=')) {
+      certPath = arg.split('=')[1];
+    }
+  }
+
+  if (keyPath && certPath) {
+    try {
+      const key = fs.existsSync(keyPath) ? fs.readFileSync(keyPath, 'utf8') : keyPath;
+      const cert = fs.existsSync(certPath) ? fs.readFileSync(certPath, 'utf8') : certPath;
+      return { key, cert };
+    } catch (err) {
+      console.warn(`[Cert] Failed to read certificate files from command line arguments (${err.message}), falling back to self-signed generation.`);
+    }
+  }
+
+  return generateSelfSignedCert();
+}
+
 function generateAndSaveCerts() {
   const { key, cert } = generateSelfSignedCert();
 
@@ -163,23 +194,6 @@ function getCerts() {
 
 let activeProtocolClient = null;
 
-/**
- * Default Proxy Handler.
- * Executes a custom `options.requestHandler` function if provided,
- * otherwise responds with a hardcoded "hello world" response.
- *
- * @param {Object} req - Incoming HTTP request stream (`http.IncomingMessage`).
- * @param {Object} res - Outgoing HTTP response stream (`http.ServerResponse`).
- * @param {Object} httpRequestDetails - Parsed HTTP request object.
- * @param {string} httpRequestDetails.protocol - 'http' or 'https'.
- * @param {string} httpRequestDetails.url - Incoming request URL path and query string.
- * @param {string} httpRequestDetails.method - HTTP Method (GET, POST, etc.).
- * @param {Object} httpRequestDetails.headers - Incoming HTTP request headers.
- * @param {string} httpRequestDetails.body - Request payload stringified UTF-8 body.
- * @param {Object} [options={}] - Configuration options.
- * @param {Function} [options.requestHandler] - Custom request/response handling callback function.
- * @returns {Promise<any>}
- */
 const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
   if (typeof options.requestHandler === 'function') {
     return await options.requestHandler(req, res, httpRequestDetails, options);
@@ -188,29 +202,6 @@ const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) =
   res.send("hello world");
 };
 
-/**
- * HTTP/HTTPS Proxy Handler.
- * Executes a custom `options.requestHandler` function if provided,
- * otherwise proxies the request to the target HTTP/HTTPS host using `sendHttpRequest`.
- * Can be used directly as a request handler or invoked by `proxyToProtocol`.
- *
- * @param {Object} req - Incoming HTTP request stream (`http.IncomingMessage`).
- * @param {Object} res - Outgoing HTTP response stream (`http.ServerResponse`).
- * @param {Object} httpRequestDetails - Parsed HTTP request object.
- * @param {string} httpRequestDetails.protocol - 'http' or 'https'.
- * @param {string} httpRequestDetails.url - Incoming request URL path and query string.
- * @param {string} httpRequestDetails.method - HTTP Method (GET, POST, etc.).
- * @param {Object} httpRequestDetails.headers - Incoming HTTP request headers.
- * @param {string} httpRequestDetails.body - Request payload stringified UTF-8 body.
- * @param {Object} [options={}] - Configuration options.
- * @param {Function} [options.requestHandler] - Custom request/response handling callback function.
- * @param {string} [options.protocolHost='127.0.0.1'] - Target host IP or domain.
- * @param {number} [options.protocolPort] - Target port.
- * @param {number} [options.targetPort] - Fallback target port if `protocolPort` is omitted.
- * @param {boolean} [options.useHttps=false] - Whether target uses HTTPS scheme.
- * @param {string} [options.protocol='http'] - Target protocol ('http' or 'https').
- * @returns {Promise<Object>} Resolves with `{ status, headers, body }`
- */
 const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
   if (typeof options.requestHandler === 'function') {
     const handlerResult = await options.requestHandler(req, res, httpRequestDetails, options);
@@ -397,9 +388,6 @@ function parseWsFrames(buffer, onFrame) {
 // SERVER CREATORS FOR ALL PROTOCOLS
 // ============================================================================
 
-/**
- * UDP Server
- */
 function createUdpServer(options = {}, genericServerHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 41234;
@@ -445,9 +433,6 @@ function createUdpServer(options = {}, genericServerHandler) {
   return { server, close: () => server.close() };
 }
 
-/**
- * TCP Server
- */
 function createTcpServer(options = {}, genericServerHandler) {
   const port = options.port || 7000;
   const host = options.host || '127.0.0.1';
@@ -488,9 +473,6 @@ function createTcpServer(options = {}, genericServerHandler) {
   return { server, close: () => server.close() };
 }
 
-/**
- * TLS Server
- */
 function createTlsServer(options = {}, genericServerHandler) {
   const port = options.port || 7001;
   const host = options.host || '127.0.0.1';
@@ -538,9 +520,6 @@ function createTlsServer(options = {}, genericServerHandler) {
   return { server, close: () => server.close() };
 }
 
-/**
- * WS / WSS Server
- */
 function handleWsUpgrade(req, socket, head, options, genericServerHandler) {
   const secKey = req.headers['sec-websocket-key'];
   if (!secKey) {
@@ -622,9 +601,6 @@ function createWssServer(options, genericServerHandler) {
   return { server, close: () => server.close() };
 }
 
-/**
- * Unix Socket / Named Pipe Server
- */
 function createSocketServer(options = {}, genericServerHandler) {
   const socketPath = typeof options === 'string'
     ? options
@@ -708,9 +684,6 @@ function createSocketServer(options = {}, genericServerHandler) {
 // CLIENT CREATORS FOR ALL PROTOCOLS
 // ============================================================================
 
-/**
- * UDP Client
- */
 function createUdpClient(options = {}, genericClientHandler) {
   const targetHost = options.host || '127.0.0.1';
   const targetPort = options.port || 41234;
@@ -774,9 +747,6 @@ function createUdpClient(options = {}, genericClientHandler) {
   };
 }
 
-/**
- * TCP, TLS & Socket Stream Client Base
- */
 function createBaseStreamClient(connectFn, genericClientHandler) {
   let socket = null;
   const pendingRequests = new Map();
@@ -880,9 +850,6 @@ function createTlsClient(options = {}, genericClientHandler) {
   }, onConnect), genericClientHandler);
 }
 
-/**
- * Unix Socket / Named Pipe Client
- */
 function createSocketClient(options = {}, genericClientHandler) {
   const socketPath = typeof options === 'string'
     ? options
@@ -894,9 +861,6 @@ function createSocketClient(options = {}, genericClientHandler) {
   );
 }
 
-/**
- * HTTP / HTTPS Client using sendHttpRequest
- */
 function createHttpClient(options = {}, genericClientHandler) {
   return {
     sendHttpRequestPayload: async function (httpRequestDetails) {
@@ -931,9 +895,6 @@ function createHttpClient(options = {}, genericClientHandler) {
   };
 }
 
-/**
- * WS / WSS Client
- */
 function createGenericWsClient(isSecure, options = {}, genericClientHandler) {
   const pendingRequests = new Map();
   let requestIdCounter = 0;
@@ -1038,14 +999,6 @@ function createWssClient(options, genericClientHandler) {
 // REVERSE PROXY ROUTER & STANDALONE PROXY TO PROTOCOL
 // ============================================================================
 
-/**
- * Standalone Protocol Proxy Handler.
- * Encapsulates creating/using the protocol client based on `options.createClient` or `options.protocol`.
- *
- * @param {Object} httpRequestDetails - Parsed request details.
- * @param {Object} [options={}] - Options object.
- * @returns {Promise<Object>} Resolves with `{ protocolClient, response: { status, headers, body } }`
- */
 async function proxyToProtocol(httpRequestDetails, options = {}) {
   let protocolClient;
   let createdInternally = false;
@@ -1134,14 +1087,6 @@ async function proxyToProtocol(httpRequestDetails, options = {}) {
 // HTTP / HTTPS SERVER ENGINE
 // ============================================================================
 
-/**
- * Creates the HTTP/HTTPS request handler function.
- *
- * @param {Object} [options={}] - Options object.
- * @param {Function} [setProtocolClient] - Callback to register active protocol client.
- * @param {Function} [proxyHandler] - Custom proxy execution function.
- * @returns {Function} Standard Node.js `(req, res)` HTTP request listener.
- */
 function createRequestHandler(options = {}, setProtocolClient = (client) => {
     activeProtocolClient = client;
   }, proxyHandler) {
@@ -1230,21 +1175,6 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
   };
 }
 
-/**
- * Creates and starts an HTTP or HTTPS Server (Original version from ide.js).
- *
- * @param {Object} [options={}] - Options configuration object.
- * @param {number} [options.port=8080] - Server port to listen on.
- * @param {number} [options.httpPort] - Alternate server port option taking precedence over `options.port`.
- * @param {boolean} [options.useHttps=false] - Whether to instantiate an HTTPS server.
- * @param {string|Buffer} [options.key] - Private key for HTTPS.
- * @param {string|Buffer} [options.cert] - Cert chain for HTTPS.
- * @param {string|Buffer|Array} [options.ca] - CA cert authority overrides.
- * @param {string|Buffer} [options.pfx] - PFX file content.
- * @param {string} [options.passphrase] - Passphrase for private key or PFX.
- * @param {Function} [proxyHandler] - Custom handler responsible for request execution.
- * @returns {Object} `{ server: http.Server|https.Server, getProtocolClient: Function }`
- */
 function createHttpServer(options = {}, proxyHandler) {
   const port = options.httpPort || options.port || 8080;
   const isHttps = Boolean(options.useHttps || (options.key && options.cert));
@@ -1299,10 +1229,12 @@ module.exports = {
 
   // Certificate Helpers
   generateSelfSignedCert,
+  getOrGenerateSelfSignedCert,
   generateAndSaveCerts,
   getCerts,
   certs: {
     generateSelfSignedCert,
+    getOrGenerateSelfSignedCert,
     generateAndSaveCerts,
     getCerts
   },
