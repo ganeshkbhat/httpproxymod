@@ -199,7 +199,7 @@ const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) =
     return await options.requestHandler(req, res, httpRequestDetails, options);
   }
 
-  res.send("hello world");
+  return { status: 200, headers: { 'content-type': 'text/plain' }, body: 'hello world' };
 };
 
 const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
@@ -853,7 +853,7 @@ function createTlsClient(options = {}, genericClientHandler) {
 function createSocketClient(options = {}, genericClientHandler) {
   const socketPath = typeof options === 'string'
     ? options
-    : (options && (options.path || options.socketPath)) || DEFAULT_SOCKET_PATH;
+    : (options && (options.path || options.socketPath || (options.host && (options.host.includes('/') || options.host.includes('\\') || options.host.startsWith('.')) ? options.host : undefined))) || DEFAULT_SOCKET_PATH;
 
   return createBaseStreamClient(
     (onConnect) => net.createConnection({ path: socketPath }, onConnect),
@@ -878,7 +878,8 @@ function createHttpClient(options = {}, genericClientHandler) {
         targetUrl: targetUrl,
         method: httpRequestDetails.method || 'GET',
         headers: httpRequestDetails.headers || {},
-        body: payload
+        body: payload,
+        rejectUnauthorized: options.rejectUnauthorized
       });
 
       const rawResult = {
@@ -1013,35 +1014,37 @@ async function proxyToProtocol(httpRequestDetails, options = {}) {
     const genericClientHandler = options.genericClientHandler;
 
     if (typeof options.createClient === 'function') {
-      protocolClient = options.createClient({ host, port, credentials: options.protocolCredentials }, genericClientHandler);
+      protocolClient = options.createClient({ host, port, credentials: options.protocolCredentials, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
     } else {
       switch (protocolType) {
         case 'udp':
           protocolClient = createUdpClient({ host, port }, genericClientHandler);
           break;
         case 'tcp':
-        case 'socket':
           protocolClient = createTcpClient({ host, port }, genericClientHandler);
           break;
         case 'tls':
-          protocolClient = createTlsClient({ host, port, key: options.key, cert: options.cert, ca: options.ca }, genericClientHandler);
+          protocolClient = createTlsClient({ host, port, key: options.key, cert: options.cert, ca: options.ca, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
           break;
         case 'http':
           protocolClient = createHttpClient({ host, port, useHttps: false }, genericClientHandler);
           break;
         case 'https':
-          protocolClient = createHttpClient({ host, port, useHttps: true }, genericClientHandler);
+          protocolClient = createHttpClient({ host, port, useHttps: true, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
           break;
         case 'websocket':
         case 'ws':
           protocolClient = createWsClient({ host, port }, genericClientHandler);
           break;
         case 'wss':
-          protocolClient = createWssClient({ host, port }, genericClientHandler);
+          protocolClient = createWssClient({ host, port, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
           break;
+        case 'socket':
         case 'unix':
         case 'pipe':
-          protocolClient = createSocketClient({ path: options.socketPath || options.path }, genericClientHandler);
+          protocolClient = createSocketClient({
+            path: options.socketPath || options.path || (options.host && (options.host.includes('/') || options.host.includes('\\') || options.host.startsWith('.')) ? options.host : undefined)
+          }, genericClientHandler);
           break;
         default:
           throw new Error(`Unsupported protocol: ${options.protocol}`);
@@ -1212,6 +1215,104 @@ function createHttpServer(options = {}, proxyHandler) {
 }
 
 // ============================================================================
+// UDP PROXY SERVER ENGINE (UDP to Any Protocol Reverse Proxy)
+// ============================================================================
+
+function createUdpProxyServer(options = {}, proxyHandler) {
+  const host = options.udpHost || options.host || '127.0.0.1';
+  const port = options.udpPort || options.port || 41234;
+  const authenticate = options.authenticate !== undefined ? options.authenticate : (() => true);
+  const handler = proxyHandler || (options.protocol ? proxyToProtocol : defaultProxyHandler);
+
+  let localActiveProtocolClient = options.protocolClient || null;
+  const setProtocolClient = (client) => {
+    localActiveProtocolClient = client;
+    activeProtocolClient = client;
+  };
+
+  const server = dgram.createSocket('udp4');
+
+  server.on('message', async (msg, rinfo) => {
+    let correlationId = null;
+    let responsePayload = {};
+
+    try {
+      const parsedData = JSON.parse(msg.toString('utf-8'));
+      correlationId = parsedData.correlationId;
+
+      const httpRequestDetails = {
+        protocol: parsedData.protocol || 'udp',
+        url: parsedData.url || '/',
+        method: parsedData.method || 'GET',
+        headers: parsedData.headers || {},
+        body: parsedData.body || ''
+      };
+
+      if (typeof authenticate === 'function') {
+        const isAllowed = await authenticate(httpRequestDetails);
+        if (!isAllowed) {
+          const errRes = {
+            correlationId,
+            status: 401,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ error: 'Unauthorized: UDP Proxy authentication failed' })
+          };
+          server.send(Buffer.from(JSON.stringify(errRes)), rinfo.port, rinfo.address);
+          return;
+        }
+      }
+
+      let proxyResult;
+      if (handler === proxyToProtocol) {
+        proxyResult = await handler(httpRequestDetails, options);
+      } else {
+        proxyResult = await handler(null, null, httpRequestDetails, options);
+      }
+
+      if (proxyResult && proxyResult.protocolClient) {
+        setProtocolClient(proxyResult.protocolResult || proxyResult.protocolClient);
+      }
+
+      const response = proxyResult && proxyResult.response
+        ? proxyResult.response
+        : (proxyResult || { status: 200, headers: {}, body: '' });
+
+      let responseBody = response.body;
+      if (typeof responseBody === 'object' && responseBody !== null && !Buffer.isBuffer(responseBody)) {
+        responseBody = JSON.stringify(responseBody);
+      }
+
+      responsePayload = {
+        correlationId,
+        status: response.status || 200,
+        headers: response.headers || { 'content-type': 'application/json' },
+        body: responseBody !== undefined ? responseBody : ''
+      };
+    } catch (err) {
+      responsePayload = {
+        correlationId,
+        status: 500,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ error: 'UDP Proxy Error', details: err.message })
+      };
+    }
+
+    const responseBuffer = Buffer.from(JSON.stringify(responsePayload));
+    server.send(responseBuffer, rinfo.port, rinfo.address);
+  });
+
+  server.bind(port, host, () => {
+    console.log(`[UDP Proxy Server] Listening on ${host}:${port} proxying to protocol: ${options.protocol || 'default'}`);
+  });
+
+  return {
+    server: server,
+    close: () => server.close(),
+    getProtocolClient: () => localActiveProtocolClient
+  };
+}
+
+// ============================================================================
 // MAIN EXPORTS & FACTORIES
 // ============================================================================
 
@@ -1221,6 +1322,7 @@ module.exports = {
 
   // Direct Server / Request Handlers / Handlers / Clients
   createHttpServer,
+  createUdpProxyServer,
   createRequestHandler,
   proxyToProtocol,
   defaultProxyHandler,
@@ -1254,6 +1356,7 @@ module.exports = {
   // Server Creators
   servers: {
     udp: createUdpServer,
+    udpProxy: createUdpProxyServer,
     tcp: createTcpServer,
     tls: createTlsServer,
     ws: createWsServer,

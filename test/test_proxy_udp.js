@@ -1,6 +1,6 @@
 const dgram = require('dgram');
 const { expect } = require('chai');
-const { proxyToProtocol } = require('../demo/proxy_udp');
+const { proxyToProtocol } = require('../demo_http/proxy_udp');
 
 const TARGET_PORT = 9001;
 

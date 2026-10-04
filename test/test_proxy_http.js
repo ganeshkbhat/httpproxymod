@@ -1,6 +1,6 @@
 const http = require('http');
 const { expect } = require('chai');
-const { proxyToProtocol } = require('../demo/proxy_http');
+const { proxyToProtocol } = require('../demo_http/proxy_http');
 
 const TARGET_PORT = 9007;
 

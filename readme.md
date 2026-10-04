@@ -1,6 +1,6 @@
-http proxy to http, udp, tls, socket, ws, wss
+http proxy to http, https, udp, tls, socket, ws, wss
 
-target server example
+target http server example
 
 ```
 const { createHttpServer } = require('../index');
@@ -17,7 +17,7 @@ const targetServerInfo = createHttpServer({
 });
 ```
 
-proxy server to target server example
+proxy http server to target server example
 
 ```
 const { createHttpServer } = require('../index');

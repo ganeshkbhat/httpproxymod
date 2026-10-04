@@ -1,6 +1,6 @@
 const tls = require('tls');
 const { expect } = require('chai');
-const { proxyToProtocol } = require('../demo/proxy_tls');
+const { proxyToProtocol } = require('../demo_http/proxy_tls');
 const { generateSelfSignedCert } = require('../index');
 const { frameMessage, parseFrames } = require('../index');
 
