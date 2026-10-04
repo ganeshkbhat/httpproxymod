@@ -199,7 +199,7 @@ const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) =
     return await options.requestHandler(req, res, httpRequestDetails, options);
   }
 
-  return { status: 200, headers: { 'content-type': 'text/plain' }, body: 'hello world' };
+  return { status: 200, headers: { 'content-type': 'text/plain' }, body: 'pong' };
 };
 
 const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
@@ -385,97 +385,191 @@ function parseWsFrames(buffer, onFrame) {
 }
 
 // ============================================================================
-// SERVER CREATORS FOR ALL PROTOCOLS
+// HANDLER RESOLUTION HELPER
 // ============================================================================
 
-function createUdpServer(options = {}, genericServerHandler) {
+function resolveHandlers(options = {}, handlerArg) {
+  const handlers = typeof handlerArg === 'function' ? { onData: handlerArg } : (handlerArg || {});
+  return {
+    onConnect: options.onConnect || handlers.onConnect,
+    onData: options.onData || handlers.onData,
+    onClose: options.onClose || handlers.onClose,
+    onEnd: options.onEnd || handlers.onEnd,
+  };
+}
+
+// ============================================================================
+// SERVER CREATORS FOR OTHER PROTOCOLS
+// ============================================================================
+
+/**
+ * Creates a generic UDP server instance with fully customizable message and event handling.
+ */
+function createUdpServer(options = {}, handlerArg) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 41234;
-  const server = dgram.createSocket('udp4');
+  
+  const handlers = resolveHandlers(options, handlerArg);
+  const onConnect = handlers.onConnect;
+  const onData = handlers.onData;
+  const onClose = handlers.onClose;
+  const onEnd = handlers.onEnd;
+  const onError = options.onError || handlers.onError;
+
+  const socketType = options.socketType || 'udp4';
+  const server = dgram.createSocket(socketType);
+
+  server.on('listening', () => {
+    if (typeof onConnect === 'function') {
+      onConnect(server);
+    }
+  });
 
   server.on('message', async (msg, rinfo) => {
-    let responsePayload = {};
-    let correlationId = null;
-
     try {
-      const parsedData = JSON.parse(msg.toString('utf-8'));
-      correlationId = parsedData.correlationId;
-
-      if (typeof genericServerHandler === 'function') {
-        const result = await genericServerHandler({
-          url: parsedData.url,
-          method: parsedData.method,
-          headers: parsedData.headers,
-          body: parsedData.body
-        });
-
-        responsePayload = {
-          correlationId,
-          status: result.status || 200,
-          headers: result.headers || { 'content-type': 'text/plain' },
-          body: result.body || ''
-        };
+      if (typeof onData === 'function') {
+        await onData(msg, rinfo, server);
       }
     } catch (err) {
-      responsePayload = {
-        correlationId,
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ error: 'Malformed UDP payload', details: err.message })
-      };
+      if (typeof onError === 'function') {
+        onError(err, msg, rinfo, server);
+      } else {
+        console.error('[UDP Server] Error handling message:', err);
+      }
     }
+  });
 
-    const responseBuffer = Buffer.from(JSON.stringify(responsePayload));
-    server.send(responseBuffer, rinfo.port, rinfo.address);
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[UDP Server] Socket error:', err);
+    }
+  });
+
+  server.on('close', () => {
+    if (typeof onClose === 'function') {
+      onClose(server);
+    }
   });
 
   server.bind(port, host);
-  return { server, close: () => server.close() };
+
+  return { 
+    server, 
+    close: () => {
+      if (typeof onEnd === 'function') {
+        onEnd(server);
+      }
+      server.close();
+    } 
+  };
 }
 
-function createTcpServer(options = {}, genericServerHandler) {
-  const port = options.port || 7000;
-  const host = options.host || '127.0.0.1';
+/**
+ * Shared helper for stream-based servers (TCP, TLS, Socket) to parse length-prefixed frames,
+ * invoke the user data handler, and write back framed responses.
+ */
+function setupStreamServerConnection(socket, server, handlers, onError) {
+  const onConnect = handlers.onConnect;
+  const onData = handlers.onData;
+  const onEnd = handlers.onEnd;
+  const onClose = handlers.onClose;
 
-  const server = net.createServer((socket) => {
-    let rxBuffer = Buffer.alloc(0);
+  if (typeof onConnect === 'function') {
+    onConnect(socket, server);
+  }
 
-    socket.on('data', (chunk) => {
-      rxBuffer = Buffer.concat([rxBuffer, chunk]);
-      rxBuffer = parseStreamFrames(rxBuffer, async (messageBuffer) => {
-        try {
-          const packet = JSON.parse(messageBuffer.toString('utf-8'));
-          const { requestId, payload } = packet;
+  let rxBuffer = Buffer.alloc(0);
 
-          const responsePayload = await genericServerHandler(payload);
+  socket.on('data', async (chunk) => {
+    rxBuffer = Buffer.concat([rxBuffer, chunk]);
+    rxBuffer = parseStreamFrames(rxBuffer, async (messageBuffer) => {
+      try {
+        const packet = JSON.parse(messageBuffer.toString('utf-8'));
+        const { requestId, payload } = packet;
+        const requestData = payload !== undefined ? payload : packet;
 
-          const responsePacket = {
-            requestId: requestId,
-            status: responsePayload.status || 200,
-            headers: responsePayload.headers || { 'content-type': 'application/json' },
-            body: responsePayload.body || ''
-          };
-
-          socket.write(frameStreamMessage(Buffer.from(JSON.stringify(responsePacket))));
-        } catch (err) {
-          const errorPacket = frameStreamMessage(Buffer.from(JSON.stringify({
-            status: 500,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ error: err.message })
-          })));
-          socket.write(errorPacket);
+        if (typeof onData === 'function') {
+          const result = await onData(requestData, socket, server, packet);
+          if (result && requestId) {
+            const responsePacket = {
+              requestId,
+              status: result.status || 200,
+              headers: result.headers || { 'content-type': 'application/json' },
+              body: result.body !== undefined ? result.body : ''
+            };
+            socket.write(frameStreamMessage(Buffer.from(JSON.stringify(responsePacket))));
+          }
         }
-      });
+      } catch (err) {
+        if (typeof onError === 'function') {
+          onError(err, messageBuffer, socket, server);
+        } else {
+          console.error('[Stream Server] Error handling message:', err);
+        }
+      }
     });
   });
 
-  server.listen(port, host);
-  return { server, close: () => server.close() };
+  socket.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, socket, server);
+    } else {
+      console.error('[Stream Server] Socket error:', err);
+    }
+  });
+
+  socket.on('end', () => {
+    if (typeof onEnd === 'function') {
+      onEnd(socket, server);
+    }
+  });
+
+  socket.on('close', (hadError) => {
+    if (typeof onClose === 'function') {
+      onClose(hadError, socket, server);
+    }
+  });
 }
 
-function createTlsServer(options = {}, genericServerHandler) {
+function createTcpServer(options = {}, handlerArg) {
+  const port = options.port || 7000;
+  const host = options.host || '127.0.0.1';
+  
+  const handlers = resolveHandlers(options, handlerArg);
+  const onError = options.onError || handlers.onError;
+
+  const server = net.createServer((socket) => {
+    setupStreamServerConnection(socket, server, handlers, onError);
+  });
+
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[TCP Server] Server error:', err);
+    }
+  });
+
+  server.listen(port, host, () => {
+    console.log(`[TCP Server] Listening on ${host}:${port}`);
+  });
+
+  return { 
+    server, 
+    close: (callback) => {
+      server.close(callback);
+    } 
+  };
+}
+
+function createTlsServer(options = {}, handlerArg) {
   const port = options.port || 7001;
   const host = options.host || '127.0.0.1';
+  
+  const handlers = resolveHandlers(options, handlerArg);
+  const onError = options.onError || handlers.onError;
 
   const tlsOptions = {
     key: options.key,
@@ -485,45 +579,41 @@ function createTlsServer(options = {}, genericServerHandler) {
   };
 
   const server = tls.createServer(tlsOptions, (socket) => {
-    let rxBuffer = Buffer.alloc(0);
-
-    socket.on('data', (chunk) => {
-      rxBuffer = Buffer.concat([rxBuffer, chunk]);
-      rxBuffer = parseStreamFrames(rxBuffer, async (messageBuffer) => {
-        try {
-          const packet = JSON.parse(messageBuffer.toString('utf-8'));
-          const { requestId, payload } = packet;
-
-          const responsePayload = await genericServerHandler(payload);
-
-          const responsePacket = {
-            requestId: requestId,
-            status: responsePayload.status || 200,
-            headers: responsePayload.headers || { 'content-type': 'application/json' },
-            body: responsePayload.body || ''
-          };
-
-          socket.write(frameStreamMessage(Buffer.from(JSON.stringify(responsePacket))));
-        } catch (err) {
-          const errorPacket = frameStreamMessage(Buffer.from(JSON.stringify({
-            status: 500,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ error: err.message })
-          })));
-          socket.write(errorPacket);
-        }
-      });
-    });
+    setupStreamServerConnection(socket, server, handlers, onError);
   });
 
-  server.listen(port, host);
-  return { server, close: () => server.close() };
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[TLS Server] Server error:', err);
+    }
+  });
+
+  server.listen(port, host, () => {
+    console.log(`[TLS Server] Listening on ${host}:${port}`);
+  });
+
+  return { 
+    server, 
+    close: (callback) => {
+      server.close(callback);
+    } 
+  };
 }
 
-function handleWsUpgrade(req, socket, head, options, genericServerHandler) {
+function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
+  const handlers = resolveHandlers(options, handlerArg);
+  const onConnect = handlers.onConnect;
+  const onData = handlers.onData;
+  const onClose = handlers.onClose;
+  const onEnd = handlers.onEnd;
+  const onError = options.onError || handlers.onError;
+
   const secKey = req.headers['sec-websocket-key'];
   if (!secKey) {
     socket.destroy();
+    if (typeof onClose === 'function') onClose(null, socket, server);
     return;
   }
 
@@ -542,80 +632,207 @@ function handleWsUpgrade(req, socket, head, options, genericServerHandler) {
 
   socket.write(headers.join('\r\n'));
 
+  if (typeof onConnect === 'function') {
+    onConnect(socket, req, server);
+  }
+
   let rxBuffer = Buffer.alloc(0);
 
-  socket.on('data', (chunk) => {
+  socket.on('data', async (chunk) => {
     rxBuffer = Buffer.concat([rxBuffer, chunk]);
     rxBuffer = parseWsFrames(rxBuffer, async (frame) => {
-      if (frame.opcode === 0x08) {
-        socket.end();
-        return;
-      }
-      if (frame.opcode === 0x01 || frame.opcode === 0x02) {
-        try {
-          const reqPayload = JSON.parse(frame.payload.toString('utf8'));
-          const reqId = reqPayload.__reqId;
-
-          const resObj = await genericServerHandler(reqPayload);
-
-          if (typeof resObj === 'object' && resObj !== null) {
-            resObj.__reqId = reqId;
+      try {
+        if (frame.opcode === 0x08) {
+          if (typeof onEnd === 'function') {
+            onEnd(socket, server);
           }
+          socket.end();
+          return;
+        }
 
-          const responseBuf = Buffer.from(JSON.stringify(resObj), 'utf8');
-          socket.write(buildWsFrame(responseBuf, true, 0x01, false));
-        } catch (err) {
-          const errBuf = Buffer.from(JSON.stringify({ status: 500, error: err.message }), 'utf8');
-          socket.write(buildWsFrame(errBuf, true, 0x01, false));
+        if (typeof onData === 'function') {
+          const reqData = JSON.parse(frame.payload.toString('utf8'));
+          const reqId = reqData.__reqId;
+          const payload = reqData;
+
+          const result = await onData(payload, socket, server, frame);
+          if (result && reqId !== undefined) {
+            const responsePayload = {
+              __reqId: reqId,
+              status: result.status || 200,
+              headers: result.headers || { 'content-type': 'application/json' },
+              body: result.body !== undefined ? result.body : ''
+            };
+            const responseFrame = buildWsFrame(Buffer.from(JSON.stringify(responsePayload), 'utf8'), true, 0x01, false);
+            socket.write(responseFrame);
+          }
+        }
+      } catch (err) {
+        if (typeof onError === 'function') {
+          onError(err, frame, socket, server);
+        } else {
+          console.error('[WebSocket Server] Error handling frame:', err);
         }
       }
     });
   });
+
+  socket.on('end', () => {
+    if (typeof onEnd === 'function') {
+      onEnd(socket, server);
+    }
+  });
+
+  socket.on('close', (hadError) => {
+    if (typeof onClose === 'function') {
+      onClose(hadError, socket, server);
+    }
+  });
 }
 
-function createWsServer(options, genericServerHandler) {
+function createWsServer(options = {}, handlerArg) {
+  const port = options.port || 8081;
+  const host = options.host || '127.0.0.1';
+  const handlers = resolveHandlers(options, handlerArg);
+  const onError = options.onError || handlers.onError;
+
   const server = http.createServer((req, res) => {
-    res.writeHead(400);
+    if (typeof options.onHttpRequest === 'function') {
+      options.onHttpRequest(req, res);
+      return;
+    }
+    res.writeHead(400, { 'content-type': 'text/plain' });
     res.end('WebSocket endpoint requires WS upgrade.');
   });
 
   server.on('upgrade', (req, socket, head) => {
-    handleWsUpgrade(req, socket, head, options, genericServerHandler);
+    handleWsUpgrade(req, socket, head, options, handlerArg, server);
   });
 
-  server.listen(options.port || 8081);
-  return { server, close: () => server.close() };
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[WebSocket Server] Server error:', err);
+    }
+  });
+
+  server.listen(port, host, () => {
+    console.log(`[WebSocket Server] Listening on ${host}:${port}`);
+  });
+
+  return { 
+    server, 
+    close: (callback) => {
+      server.close(callback);
+    } 
+  };
 }
 
-function createWssServer(options, genericServerHandler) {
-  const server = https.createServer(options, (req, res) => {
-    res.writeHead(400);
-    res.end('WebSocket Secure endpoint requires WSS upgrade.');
+function createWssServer(options = {}, handlerArg) {
+  const port = options.port || 8443;
+  const host = options.host || '127.0.0.1';
+  const handlers = resolveHandlers(options, handlerArg);
+  const onError = options.onError || handlers.onError;
+
+  let certs = {};
+  if (!options.key || !options.cert) {
+    certs = getCerts();
+  }
+
+  const tlsOptions = {
+    key: options.key || certs.key,
+    cert: options.cert || certs.cert,
+    ca: options.ca,
+    pfx: options.pfx,
+    passphrase: options.passphrase,
+    rejectUnauthorized: options.rejectUnauthorized !== undefined ? options.rejectUnauthorized : false
+  };
+
+  const server = https.createServer(tlsOptions, async (req, res) => {
+    try {
+      const requestHandler = options.onHttpRequest || options.onRequest || options.onNonUpgradeRequest;
+      if (typeof requestHandler === 'function') {
+        await requestHandler(req, res, options);
+        return;
+      }
+
+      if (typeof handlers.onHttpRequest === 'function') {
+        await handlers.onHttpRequest(req, res, options);
+        return;
+      }
+
+      const defaultHttpHandler = options.defaultHttpHandler || ((request, response) => {
+        if (!response.headersSent) {
+          response.writeHead(400, { 'content-type': 'text/plain' });
+          response.end('WebSocket Secure endpoint requires WSS upgrade.');
+        }
+      });
+      await defaultHttpHandler(req, res, options);
+    } catch (err) {
+      if (typeof onError === 'function') {
+        onError(err, req, res, server);
+      } else {
+        console.error('[WSS Server] Error handling HTTP request:', err);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Internal Server Error', details: err.message }));
+        }
+      }
+    }
   });
 
   server.on('upgrade', (req, socket, head) => {
-    handleWsUpgrade(req, socket, head, options, genericServerHandler);
+    try {
+      if (typeof options.onUpgrade === 'function') {
+        options.onUpgrade(req, socket, head, server);
+        return;
+      }
+      handleWsUpgrade(req, socket, head, options, handlerArg, server);
+    } catch (err) {
+      if (typeof onError === 'function') {
+        onError(err, { req, socket, head }, null, server);
+      } else {
+        console.error('[WSS Server] Error during upgrade handshake:', err);
+        socket.destroy();
+      }
+    }
   });
 
-  server.listen(options.port || 8443);
-  return { server, close: () => server.close() };
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[WSS Server] Server error:', err);
+    }
+  });
+
+  server.listen(port, host, () => {
+    if (typeof options.onListening === 'function') {
+      options.onListening(server);
+    } else {
+      console.log(`[WSS Server] Listening on ${host}:${port}`);
+    }
+  });
+
+  return { 
+    server, 
+    close: (callback) => {
+      if (typeof options.onCloseServer === 'function') {
+        options.onCloseServer(server);
+      }
+      server.close(callback);
+    } 
+  };
 }
 
-function createSocketServer(options = {}, genericServerHandler) {
+function createSocketServer(options = {}, handlerArg) {
   const socketPath = typeof options === 'string'
     ? options
     : (options && (options.path || options.socketPath)) || DEFAULT_SOCKET_PATH;
 
-  const handler = typeof options === 'function' ? options : genericServerHandler;
-
-  const defaultOnData = (data) => ({
-    protocol: 'UNIX_SOCKET',
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-    body: { message: 'Hello from Unix Socket Server', echo: data }
-  });
-
-  const dataHandler = handler || defaultOnData;
+  const handlers = resolveHandlers(typeof options === 'object' ? options : {}, handlerArg);
+  const onError = options.onError || handlers.onError;
 
   if (process.platform !== 'win32' && fs.existsSync(socketPath)) {
     try {
@@ -624,60 +841,27 @@ function createSocketServer(options = {}, genericServerHandler) {
   }
 
   const server = net.createServer((socket) => {
-    let rxBuffer = Buffer.alloc(0);
-
-    socket.on('data', (chunk) => {
-      rxBuffer = Buffer.concat([rxBuffer, chunk]);
-      rxBuffer = parseStreamFrames(rxBuffer, async (messageBuffer) => {
-        try {
-          const rawMessage = messageBuffer.toString('utf-8');
-          let packet;
-          try {
-            packet = JSON.parse(rawMessage);
-          } catch (_) {
-            packet = rawMessage;
-          }
-
-          if (packet && typeof packet === 'object' && packet.requestId !== undefined) {
-            const { requestId, payload } = packet;
-            const responsePayload = await dataHandler(payload || packet, socket);
-
-            const responsePacket = {
-              requestId: requestId,
-              status: responsePayload ? (responsePayload.status || 200) : 200,
-              headers: responsePayload ? (responsePayload.headers || { 'content-type': 'application/json' }) : { 'content-type': 'application/json' },
-              body: responsePayload ? (responsePayload.body !== undefined ? responsePayload.body : responsePayload) : ''
-            };
-
-            socket.write(frameStreamMessage(Buffer.from(JSON.stringify(responsePacket))));
-          } else {
-            const response = await dataHandler(packet, socket);
-            if (response !== undefined && response !== null) {
-              const resBuffer = typeof response === 'string' || Buffer.isBuffer(response)
-                ? Buffer.from(response)
-                : Buffer.from(JSON.stringify(response));
-              socket.write(frameStreamMessage(resBuffer));
-            }
-          }
-        } catch (err) {
-          console.error('[Socket Server] Error handling frame:', err);
-          const errorResponse = {
-            status: 500,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ error: err.message })
-          };
-          socket.write(frameStreamMessage(Buffer.from(JSON.stringify(errorResponse))));
-        }
-      });
-    });
-
-    socket.on('error', (err) => {
-      console.error('[Socket Server] Socket error:', err.message);
-    });
+    setupStreamServerConnection(socket, server, handlers, onError);
   });
 
-  server.listen(socketPath);
-  return { server, close: () => server.close() };
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[Socket Server] Server error:', err);
+    }
+  });
+
+  server.listen(socketPath, () => {
+    console.log(`[Socket Server] Listening on path ${socketPath}`);
+  });
+
+  return { 
+    server, 
+    close: (callback) => {
+      server.close(callback);
+    } 
+  };
 }
 
 // ============================================================================
@@ -1000,7 +1184,7 @@ function createWssClient(options, genericClientHandler) {
 // REVERSE PROXY ROUTER & STANDALONE PROXY TO PROTOCOL
 // ============================================================================
 
-async function proxyToProtocol(httpRequestDetails, options = {}) {
+async function httpProxyToProtocol(httpRequestDetails, options = {}) {
   let protocolClient;
   let createdInternally = false;
 
@@ -1086,31 +1270,132 @@ async function proxyToProtocol(httpRequestDetails, options = {}) {
   }
 }
 
+async function udpProxyToProtocol(udpMessageDetails, options = {}) {
+  let protocolClient;
+  let createdInternally = false;
+
+  if (options.protocolClient) {
+    protocolClient = options.protocolClient;
+  } else {
+    createdInternally = true;
+    const protocolType = (options.protocol || 'udp').toLowerCase();
+    const host = options.protocolHost || options.host || '127.0.0.1';
+    const port = options.protocolPort || options.port;
+    const genericClientHandler = options.genericClientHandler;
+
+    if (typeof options.createClient === 'function') {
+      protocolClient = options.createClient({ host, port, credentials: options.protocolCredentials, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
+    } else {
+      switch (protocolType) {
+        case 'udp':
+          protocolClient = createUdpClient({ host, port }, genericClientHandler);
+          break;
+        case 'tcp':
+          protocolClient = createTcpClient({ host, port }, genericClientHandler);
+          break;
+        case 'tls':
+          protocolClient = createTlsClient({ host, port, key: options.key, cert: options.cert, ca: options.ca, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
+          break;
+        case 'http':
+          protocolClient = createHttpClient({ host, port, useHttps: false }, genericClientHandler);
+          break;
+        case 'https':
+          protocolClient = createHttpClient({ host, port, useHttps: true, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
+          break;
+        case 'websocket':
+        case 'ws':
+          protocolClient = createWsClient({ host, port }, genericClientHandler);
+          break;
+        case 'wss':
+          protocolClient = createWssClient({ host, port, rejectUnauthorized: options.rejectUnauthorized }, genericClientHandler);
+          break;
+        case 'socket':
+        case 'unix':
+        case 'pipe':
+          protocolClient = createSocketClient({
+            path: options.socketPath || options.path || (options.host && (options.host.includes('/') || options.host.includes('\\') || options.host.startsWith('.')) ? options.host : undefined)
+          }, genericClientHandler);
+          break;
+        default:
+          throw new Error(`Unsupported protocol for UDP proxy: ${options.protocol}`);
+      }
+    }
+  }
+
+  const shouldAutoClose = createdInternally && options.autoClose !== false && options.keepAlive !== true;
+
+  const httpRequestDetails = {
+    protocol: udpMessageDetails.protocol || 'udp',
+    url: udpMessageDetails.url || '/',
+    method: udpMessageDetails.method || 'GET',
+    headers: udpMessageDetails.headers || {},
+    body: udpMessageDetails.body || ''
+  };
+
+  try {
+    const proxyResponse = await protocolClient.sendHttpRequestPayload(httpRequestDetails);
+    const result = {
+      protocolClient: protocolClient,
+      response: {
+        status: proxyResponse.status || 200,
+        headers: proxyResponse.headers || { 'content-type': 'application/json' },
+        body: proxyResponse.body || ''
+      }
+    };
+    if (shouldAutoClose && typeof protocolClient.close === 'function') {
+      protocolClient.close();
+    }
+    return result;
+  } catch (err) {
+    if (shouldAutoClose && typeof protocolClient.close === 'function') {
+      protocolClient.close();
+    }
+    return {
+      protocolClient: protocolClient,
+      response: {
+        status: 504,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          error: 'Gateway Timeout / UDP Protocol Forwarding Failed',
+          details: err.message
+        })
+      }
+    };
+  }
+}
+
 // ============================================================================
 // HTTP / HTTPS SERVER ENGINE
 // ============================================================================
 
 function createRequestHandler(options = {}, setProtocolClient = (client) => {
     activeProtocolClient = client;
-  }, proxyHandler) {
+  }, handlerArg) {
+  const { onConnect, onData, onClose, onEnd } = resolveHandlers(options, handlerArg);
+  
   const authenticate = options.authenticate !== undefined
     ? options.authenticate
-    : ((httpRequestDetails) => true);
+    : null;
 
   const protocol = options.useHttps || (options.key && options.cert) ? 'https' : 'http';
   
-  const handler = proxyHandler || (options.protocol ? proxyToProtocol : defaultProxyHandler);
+  const requestProcessor = handlerArg && typeof handlerArg === 'function' && handlerArg.name !== 'resolveHandlers' 
+    ? handlerArg 
+    : (options.onData || options.requestHandler || options.proxyHandler || (options.protocol ? httpProxyToProtocol : null));
 
   return (req, res) => {
+    if (typeof onConnect === 'function') {
+      onConnect(req, res);
+    }
+
     if (typeof res.send !== 'function') {
-      res.send = (data) => {
+      res.send = (data, status = 200, headers = { 'content-type': 'text/plain' }) => {
         if (!res.headersSent) {
           if (typeof data === 'object' && data !== null && !Buffer.isBuffer(data)) {
-            res.writeHead(200, { 'content-type': 'application/json' });
+            headers = { 'content-type': 'application/json', ...headers };
             data = JSON.stringify(data);
-          } else {
-            res.writeHead(200, { 'content-type': 'text/plain' });
           }
+          res.writeHead(status, headers);
         }
         res.end(data);
       };
@@ -1123,6 +1408,10 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
     });
 
     req.on('end', async () => {
+      if (typeof onEnd === 'function') {
+        onEnd(req, res);
+      }
+
       const requestBody = Buffer.concat(bodyChunks).toString('utf-8');
 
       const httpRequestDetails = {
@@ -1133,52 +1422,87 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
         body: requestBody
       };
 
-      if (typeof authenticate !== 'function') {
-        res.writeHead(401, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({
-          error: 'Unauthorized: Authentication handler is not a function'
-        }));
+      if (typeof authenticate === 'function') {
+        try {
+          const isAllowed = await authenticate(httpRequestDetails, req, res);
+          if (!isAllowed) {
+            if (!res.headersSent) {
+              res.writeHead(401, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({
+                error: 'Unauthorized: Custom authentication check failed'
+              }));
+            }
+            if (typeof onClose === 'function') onClose(req, res);
+            return;
+          }
+        } catch (authErr) {
+          if (!res.headersSent) {
+            res.writeHead(500, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({
+              error: 'Authentication Exception',
+              details: authErr.message
+            }));
+          }
+          if (typeof onClose === 'function') onClose(req, res);
+          return;
+        }
       }
 
-      const isAllowed = await authenticate(httpRequestDetails);
-      if (!isAllowed) {
-        res.writeHead(401, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({
-          error: 'Unauthorized: HTTP Server custom authentication failed'
-        }));
+      try {
+        let processorResult;
+        if (typeof requestProcessor === 'function') {
+          processorResult = await requestProcessor(req, res, httpRequestDetails, options);
+        } else {
+          const notFoundHandler = options.onNotFound || ((req, res) => {
+            if (!res.headersSent) {
+              res.writeHead(404, { 'content-type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Not Found: No request processor or handler configured' }));
+            }
+          });
+          processorResult = await notFoundHandler(req, res, httpRequestDetails, options);
+        }
+
+        if (res.writableEnded || res.finished) {
+          if (typeof onClose === 'function') onClose(req, res);
+          return;
+        }
+
+        if (processorResult && processorResult.protocolClient) {
+          setProtocolClient(processorResult.protocolResult || processorResult.protocolClient);
+        }
+
+        if (processorResult && (processorResult.status !== undefined || processorResult.body !== undefined)) {
+          const responseStatus = processorResult.status || 200;
+          const responseHeaders = processorResult.headers || { 'content-type': 'text/plain' };
+          let responseBody = processorResult.body;
+
+          if (typeof responseBody === 'object' && responseBody !== null && !Buffer.isBuffer(responseBody)) {
+            responseBody = JSON.stringify(responseBody);
+          }
+
+          if (!res.headersSent) {
+            res.writeHead(responseStatus, responseHeaders);
+            res.end(responseBody !== undefined ? responseBody : '');
+          }
+        }
+      } catch (err) {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'Internal Server Error',
+            details: err.message
+          }));
+        }
       }
 
-      let proxyResult;
-      if (handler === proxyToProtocol) {
-        proxyResult = await handler(httpRequestDetails, options);
-      } else {
-        proxyResult = await handler(req, res, httpRequestDetails, options);
+      if (typeof onClose === 'function') {
+        onClose(req, res);
       }
-
-      if (res.writableEnded || res.finished) {
-        return;
-      }
-
-      if (proxyResult && proxyResult.protocolClient) {
-        setProtocolClient(proxyResult.protocolResult || proxyResult.protocolClient);
-      }
-
-      const response = proxyResult && proxyResult.response
-        ? proxyResult.response
-        : { status: 500, headers: {}, body: 'Internal Server Error' };
-
-      let responseBody = response.body;
-      if (typeof responseBody === 'object' && responseBody !== null && !Buffer.isBuffer(responseBody)) {
-        responseBody = JSON.stringify(responseBody);
-      }
-
-      res.writeHead(response.status, response.headers);
-      res.end(responseBody);
     });
   };
 }
 
-function createHttpServer(options = {}, proxyHandler) {
+function createHttpServer(options = {}, requestHandlerArg) {
   const port = options.httpPort || options.port || 8080;
   const isHttps = Boolean(options.useHttps || (options.key && options.cert));
 
@@ -1187,16 +1511,21 @@ function createHttpServer(options = {}, proxyHandler) {
   const requestHandler = createRequestHandler(options, (client) => {
     localActiveProtocolClient = client;
     activeProtocolClient = client;
-  }, proxyHandler);
+  }, requestHandlerArg);
 
   let server;
   if (isHttps) {
+    let certs = {};
+    if (!options.key || !options.cert) {
+      certs = getCerts();
+    }
     const tlsOptions = {
-      key: options.key,
-      cert: options.cert,
+      key: options.key || certs.key,
+      cert: options.cert || certs.cert,
       ca: options.ca,
       pfx: options.pfx,
-      passphrase: options.passphrase
+      passphrase: options.passphrase,
+      rejectUnauthorized: options.rejectUnauthorized !== undefined ? options.rejectUnauthorized : false
     };
     server = https.createServer(tlsOptions, requestHandler);
   } else {
@@ -1205,7 +1534,7 @@ function createHttpServer(options = {}, proxyHandler) {
 
   server.listen(port, () => {
     const protocolScheme = isHttps ? 'HTTPS' : 'HTTP';
-    console.log(`[${protocolScheme} Server HU] Listening on port ${port}`);
+    console.log(`[${protocolScheme} Server] Listening on port ${port}`);
   });
 
   return {
@@ -1215,14 +1544,15 @@ function createHttpServer(options = {}, proxyHandler) {
 }
 
 // ============================================================================
-// UDP PROXY SERVER ENGINE (UDP to Any Protocol Reverse Proxy)
+// UDP PROXY SERVER ENGINE
 // ============================================================================
 
 function createUdpProxyServer(options = {}, proxyHandler) {
   const host = options.udpHost || options.host || '127.0.0.1';
   const port = options.udpPort || options.port || 41234;
-  const authenticate = options.authenticate !== undefined ? options.authenticate : (() => true);
-  const handler = proxyHandler || (options.protocol ? proxyToProtocol : defaultProxyHandler);
+  const { onConnect, onData, onClose, onEnd } = resolveHandlers(options, proxyHandler);
+  const authenticate = options.authenticate !== undefined ? options.authenticate : null;
+  const handler = onData || proxyHandler || (options.protocol ? udpProxyToProtocol : null);
 
   let localActiveProtocolClient = options.protocolClient || null;
   const setProtocolClient = (client) => {
@@ -1232,6 +1562,12 @@ function createUdpProxyServer(options = {}, proxyHandler) {
 
   const server = dgram.createSocket('udp4');
 
+  if (typeof onConnect === 'function') {
+    server.on('listening', () => {
+      onConnect(server);
+    });
+  }
+
   server.on('message', async (msg, rinfo) => {
     let correlationId = null;
     let responsePayload = {};
@@ -1240,7 +1576,7 @@ function createUdpProxyServer(options = {}, proxyHandler) {
       const parsedData = JSON.parse(msg.toString('utf-8'));
       correlationId = parsedData.correlationId;
 
-      const httpRequestDetails = {
+      const udpMessageDetails = {
         protocol: parsedData.protocol || 'udp',
         url: parsedData.url || '/',
         method: parsedData.method || 'GET',
@@ -1249,7 +1585,7 @@ function createUdpProxyServer(options = {}, proxyHandler) {
       };
 
       if (typeof authenticate === 'function') {
-        const isAllowed = await authenticate(httpRequestDetails);
+        const isAllowed = await authenticate(udpMessageDetails);
         if (!isAllowed) {
           const errRes = {
             correlationId,
@@ -1263,10 +1599,12 @@ function createUdpProxyServer(options = {}, proxyHandler) {
       }
 
       let proxyResult;
-      if (handler === proxyToProtocol) {
-        proxyResult = await handler(httpRequestDetails, options);
+      if (handler === udpProxyToProtocol) {
+        proxyResult = await udpProxyToProtocol(udpMessageDetails, options);
+      } else if (typeof handler === 'function') {
+        proxyResult = await handler(udpMessageDetails, rinfo, server);
       } else {
-        proxyResult = await handler(null, null, httpRequestDetails, options);
+        proxyResult = { status: 404, body: { error: 'Not Found: No UDP proxy handler configured' } };
       }
 
       if (proxyResult && proxyResult.protocolClient) {
@@ -1301,13 +1639,22 @@ function createUdpProxyServer(options = {}, proxyHandler) {
     server.send(responseBuffer, rinfo.port, rinfo.address);
   });
 
+  server.on('close', () => {
+    if (typeof onClose === 'function') {
+      onClose(server);
+    }
+  });
+
   server.bind(port, host, () => {
     console.log(`[UDP Proxy Server] Listening on ${host}:${port} proxying to protocol: ${options.protocol || 'default'}`);
   });
 
   return {
     server: server,
-    close: () => server.close(),
+    close: () => {
+      if (typeof onEnd === 'function') onEnd(server);
+      server.close();
+    },
     getProtocolClient: () => localActiveProtocolClient
   };
 }
@@ -1324,7 +1671,8 @@ module.exports = {
   createHttpServer,
   createUdpProxyServer,
   createRequestHandler,
-  proxyToProtocol,
+  httpProxyToProtocol,
+  udpProxyToProtocol,
   defaultProxyHandler,
   httpProxyHandler,
   sendHttpRequest,

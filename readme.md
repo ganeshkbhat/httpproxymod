@@ -1,5 +1,73 @@
 http proxy to http, https, udp, tls, socket, ws, wss
 
+all exports from the package to manage and handle proxies
+
+```
+{
+  // Constants
+  DEFAULT_SOCKET_PATH,
+
+  // Direct Server / Request Handlers / Handlers / Clients
+  createHttpServer, // Create HTTP or HTTPS server
+  createUdpProxyServer, // Create UDP Proxy
+  createRequestHandler, // Create request handler for HTTP/S server
+  proxyToProtocol, // Generic proxy to protocol switcher
+  udpProxyToProtocol, 
+  defaultProxyHandler, // Create simple ping request handler for HTTP/S server
+  httpProxyHandler, // http proxy handler
+  sendHttpRequest, // simple flexible http request creator
+
+  // Certificate Helpers
+  generateSelfSignedCert, // generate self signed key and cert 
+  getOrGenerateSelfSignedCert, // get key and cert from command line or create one if not provided
+  generateAndSaveCerts, // generate and save key and cert in folder
+  getCerts, // get key and cert
+  certs: {
+    generateSelfSignedCert,
+    getOrGenerateSelfSignedCert,
+    generateAndSaveCerts,
+    getCerts
+  },
+
+  // Framing Helpers for ws and wss 
+  frameMessage,
+  parseFrames,
+  frameStreamMessage,
+  parseStreamFrames,
+  framing: {
+    frameMessage,
+    parseFrames,
+    frameStreamMessage,
+    parseStreamFrames
+  },
+
+  // Server Creators
+  servers: {
+    udp: createUdpServer, // create UDP server
+    udpProxy: createUdpProxyServer, // create UDP Proxy server
+    tcp: createTcpServer, // create TCP server
+    tls: createTlsServer, // create TLS server
+    ws: createWsServer, // create WS server
+    wss: createWssServer, // create WSS server
+    socket: createSocketServer, // create Socket server
+    unix: createSocketServer // create Socket server
+  },
+
+  // Client Creators
+  clients: {
+    udp: createUdpClient, // create UDP Client
+    tcp: createTcpClient,  // create TCP Client
+    tls: createTlsClient,  // create TLS Client
+    http: (opts, handler) => createHttpClient({ ...opts, useHttps: false }, handler),  // create HTTP Client
+    https: (opts, handler) => createHttpClient({ ...opts, useHttps: true }, handler),  // create HTTPS Client
+    ws: createWsClient,  // create WS Client
+    wss: createWssClient,  // create WSS Client
+    socket: createSocketClient,  // create Socket Client
+    unix: createSocketClient  // create Socket Client
+  }
+};
+```
+
 target http server example
 
 ```
