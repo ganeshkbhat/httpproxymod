@@ -1,29 +1,41 @@
-const { servers, parseWsFrames, buildWsFrame, getCerts } = require('../index.js');
+const { servers, getCerts } = require('../index.js');
 
-function createTargetWssServer(port = 8443, certs) {
+function createTargetWssServer(port = 8007, certs) {
   const resolvedCerts = certs || getCerts();
   return servers.wss({
     port,
     key: resolvedCerts.key,
     cert: resolvedCerts.cert,
-    rejectUnauthorized: false
+    rejectUnauthorized: false // Ensure server-side trust configuration allows self-signed negotiation
   }, {
-    onData: async (frame, socket) => {
-      if (frame.opcode === 0x01 || frame.opcode === 0x02) {
-        try {
-          const reqPayload = JSON.parse(frame.payload.toString());
-          const resObj = {
-            server: 'WSS Target Server',
-            status: 200,
-            body: JSON.stringify({ received: reqPayload })
-          };
-          if (reqPayload.__reqId !== undefined) {
-            resObj.__reqId = reqPayload.__reqId;
+    onData: async (payload, socket, server, frame) => {
+      try {
+        console.log('[WSS Target] Received payload:', payload);
+        
+        // Extract request ID if present
+        const reqId = payload.__reqId;
+
+        const resObj = {
+          server: 'WSS Target Server',
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: {
+            received: payload
           }
-          socket.write(buildWsFrame(Buffer.from(JSON.stringify(resObj))));
-        } catch (e) {
-          console.error('[WSS Target Error]', e);
+        };
+
+        if (reqId !== undefined) {
+          resObj.body.__reqId = reqId;
         }
+
+        return resObj;
+      } catch (e) {
+        console.error('[WSS Target Error]', e);
+        return {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+          body: { error: 'Internal Server Error', details: e.message }
+        };
       }
     }
   });
@@ -31,7 +43,7 @@ function createTargetWssServer(port = 8443, certs) {
 
 if (require.main === module) {
   try {
-    createTargetWssServer(8443);
+    createTargetWssServer(8007);
   } catch (e) {
     console.error('Please generate key.pem and cert.pem first.', e);
   }

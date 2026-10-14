@@ -1,6 +1,6 @@
 const { servers } = require('../index.js');
 
-function createTargetUdpServer(port = 41235) {
+function createTargetUdpServer(port = 8005) {
   return servers.udp({ port, host: '127.0.0.1' }, async (msg, rinfo, server) => {
     let parsed;
     try {
@@ -19,7 +19,8 @@ function createTargetUdpServer(port = 41235) {
 }
 
 if (require.main === module) {
-  createTargetUdpServer(41235);
+  createTargetUdpServer(8005);
+  console.log("[Target Server] Server running on UDP protocol in port 8005")
 }
 
 module.exports = { createTargetUdpServer };

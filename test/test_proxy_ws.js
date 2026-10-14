@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_ws');
 
-const TARGET_PORT = 9004;
+const TARGET_PORT = 8006;
 const WS_GUID = '23582111-PRTE-4B0E-9A0B-8C5E8C925682';
 
 describe('WS Proxy Module (proxy_ws.js)', function () {

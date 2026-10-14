@@ -1,57 +1,50 @@
-const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
+const { servers } = require('../index.js');
 
 /**
- * UDP to TCP Proxy Server Demo using udpProxyToProtocol
+ * UDP to TCP Proxy Server using built-in servers.udpProxy from index.js
  */
 function createUdpToTcpProxy(options = {}, customLifecycle = {}) {
   const targetHost = options.targetHost || options.protocolHost || '127.0.0.1';
-  const targetPort = options.targetPort || options.protocolPort || 7000;
+  const targetPort = options.targetPort || options.protocolPort || 8003;
 
-  const serverOptions = {
+  return servers.udpProxy({
     udpHost: options.udpHost || options.host || '127.0.0.1',
     udpPort: options.udpPort || options.port || 41210,
     protocol: 'tcp',
     protocolHost: targetHost,
     protocolPort: targetPort,
-    ...options
-  };
-
-  const proxyHandler = async (udpMessageDetails, rinfo, server) => {
-    if (typeof customLifecycle.onMessageReceived === 'function') {
-      await customLifecycle.onMessageReceived(udpMessageDetails, rinfo, server);
-    }
-
-    let messageDetails = udpMessageDetails;
-    if (typeof customLifecycle.onRequestModified === 'function') {
-      messageDetails = await customLifecycle.onRequestModified(messageDetails, rinfo);
-    }
-
-    const result = await udpProxyToProtocol(messageDetails, serverOptions);
-
-    let response = result.response;
-    if (typeof customLifecycle.onResponseReceived === 'function') {
-      response = await customLifecycle.onResponseReceived(response, messageDetails);
-    }
-
-    return {
-      status: response.status,
-      headers: response.headers,
-      body: response.body
-    };
-  };
-
-  const lifecycleOptions = {
+    ...options,
     onConnect: (server) => {
-      console.log(`[UDP->TCP Proxy] Listening on ${serverOptions.udpHost}:${serverOptions.udpPort} proxying to TCP ${targetHost}:${targetPort}`);
-      if (typeof customLifecycle.onConnect === 'function') customLifecycle.onConnect(server);
+      console.log(`[UDP->TCP Proxy] Listening on port ${options.udpPort || options.port || 41210} proxying to TCP ${targetHost}:${targetPort}`);
+      if (typeof customLifecycle.onConnect === 'function') {
+        customLifecycle.onConnect(server);
+      }
     },
     onClose: (server) => {
       console.log(`[UDP->TCP Proxy] Server closed`);
-      if (typeof customLifecycle.onClose === 'function') customLifecycle.onClose(server);
-    }
-  };
+      if (typeof customLifecycle.onClose === 'function') {
+        customLifecycle.onClose(server);
+      }
+    },
+    onMessage: async (udpMessageDetails, rinfo, server) => {
+      if (typeof customLifecycle.onMessageReceived === 'function') {
+        await customLifecycle.onMessageReceived(udpMessageDetails, rinfo, server);
+      }
 
-  return createUdpProxyServer({ ...serverOptions, ...lifecycleOptions }, proxyHandler);
+      let messageDetails = udpMessageDetails;
+      if (typeof customLifecycle.onRequestModified === 'function') {
+        messageDetails = await customLifecycle.onRequestModified(messageDetails, rinfo);
+      }
+      return messageDetails;
+    },
+    onData: async (response, rinfo, server) => {
+      let res = response;
+      if (typeof customLifecycle.onData === 'function') {
+        res = await customLifecycle.onData(res, { rinfo });
+      }
+      return res;
+    }
+  });
 }
 
 if (require.main === module) {

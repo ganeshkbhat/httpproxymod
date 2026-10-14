@@ -5,7 +5,7 @@ const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
  */
 function createUdpToWssProxy(options = {}, customLifecycle = {}) {
   const targetHost = options.targetHost || options.protocolHost || '127.0.0.1';
-  const targetPort = options.targetPort || options.protocolPort || 8443;
+  const targetPort = options.targetPort || options.protocolPort || 8007;
 
   const serverOptions = {
     udpHost: options.udpHost || options.host || '127.0.0.1',
@@ -13,7 +13,8 @@ function createUdpToWssProxy(options = {}, customLifecycle = {}) {
     protocol: 'wss',
     protocolHost: targetHost,
     protocolPort: targetPort,
-    rejectUnauthorized: options.rejectUnauthorized !== false,
+    // Explicitly disable strict certificate verification for self-signed certificates
+    rejectUnauthorized: false,
     ...options
   };
 

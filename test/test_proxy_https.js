@@ -3,7 +3,7 @@ const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_https');
 const { generateSelfSignedCert } = require('../index');
 
-const TARGET_PORT = 9008;
+const TARGET_PORT = 8002;
 
 describe('HTTPS Proxy Module (proxy_https.js)', function () {
   this.timeout(5000);

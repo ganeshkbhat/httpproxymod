@@ -2,7 +2,7 @@ const dgram = require('dgram');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_udp');
 
-const TARGET_PORT = 9001;
+const TARGET_PORT = 8005;
 
 describe('UDP Proxy Module (proxy_udp.js)', function () {
   this.timeout(5000);

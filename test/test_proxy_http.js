@@ -2,7 +2,7 @@ const http = require('http');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_http');
 
-const TARGET_PORT = 9007;
+const TARGET_PORT = 8001;
 
 describe('HTTP Proxy Module (proxy_http.js)', function () {
   this.timeout(5000);

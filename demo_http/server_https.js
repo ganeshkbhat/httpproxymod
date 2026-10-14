@@ -1,7 +1,7 @@
 const { createHttpServer: createServer } = require('../index');
 const { generateSelfSignedCert } = require('../index');
 
-function createHttpsServer(port = 9008, onData) {
+function createHttpsServer(port = 8002, onData) {
   const defaultOnData = (data) => ({
     protocol: 'HTTPS',
     status: 200,

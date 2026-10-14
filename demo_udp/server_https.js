@@ -1,6 +1,6 @@
 const { createHttpServer, getCerts } = require('../index.js');
 
-function createTargetHttpsServer(port = 8443, certs) {
+function createTargetHttpsServer(port = 8002, certs) {
   const resolvedCerts = certs || getCerts();
   return createHttpServer({
     port,
@@ -25,7 +25,7 @@ function createTargetHttpsServer(port = 8443, certs) {
 
 if (require.main === module) {
   try {
-    createTargetHttpsServer(8443);
+    createTargetHttpsServer(8002);
   } catch (e) {
     console.error('Please generate key.pem and cert.pem first.', e);
   }

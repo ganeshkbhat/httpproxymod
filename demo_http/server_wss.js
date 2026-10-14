@@ -13,7 +13,7 @@ function buildWsFrame(payloadBuffer) {
   return frame;
 }
 
-function createWssServer(port = 9005, onMessage) {
+function createWssServer(port = 8007, onMessage) {
   const defaultOnMessage = (message) => ({
     protocol: 'WSS',
     status: 200,

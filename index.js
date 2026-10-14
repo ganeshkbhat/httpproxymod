@@ -391,10 +391,17 @@ function parseWsFrames(buffer, onFrame) {
 function resolveHandlers(options = {}, handlerArg) {
   const handlers = typeof handlerArg === 'function' ? { onData: handlerArg } : (handlerArg || {});
   return {
-    onConnect: options.onConnect || handlers.onConnect,
-    onData: options.onData || handlers.onData,
+    onConnection: options.onConnection || handlers.onConnection || options.onConnect || handlers.onConnect,
+    onConnect: options.onConnect || handlers.onConnect || options.onConnection || handlers.onConnection,
+    onMessage: options.onMessage || handlers.onMessage || options.onData || handlers.onData,
+    onData: options.onData || handlers.onData || options.onMessage || handlers.onMessage,
     onClose: options.onClose || handlers.onClose,
     onEnd: options.onEnd || handlers.onEnd,
+    onError: options.onError || handlers.onError,
+    onDestroy: options.onDestroy || handlers.onDestroy,
+    onMessageReceived: options.onMessageReceived || handlers.onMessageReceived,
+    onRequestModified: options.onRequestModified || handlers.onRequestModified,
+    onResponseReceived: options.onResponseReceived || handlers.onResponseReceived
   };
 }
 
@@ -402,19 +409,17 @@ function resolveHandlers(options = {}, handlerArg) {
 // SERVER CREATORS FOR OTHER PROTOCOLS
 // ============================================================================
 
-/**
- * Creates a generic UDP server instance with fully customizable message and event handling.
- */
 function createUdpServer(options = {}, handlerArg) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 41234;
   
   const handlers = resolveHandlers(options, handlerArg);
-  const onConnect = handlers.onConnect;
-  const onData = handlers.onData;
+  const onConnect = handlers.onConnect || handlers.onConnection;
+  const onData = handlers.onData || handlers.onMessage || handlers.onMessageReceived;
   const onClose = handlers.onClose;
   const onEnd = handlers.onEnd;
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy;
 
   const socketType = options.socketType || 'udp4';
   const server = dgram.createSocket(socketType);
@@ -462,17 +467,16 @@ function createUdpServer(options = {}, handlerArg) {
         onEnd(server);
       }
       server.close();
+      if (typeof onDestroy === 'function') {
+        onDestroy(server);
+      }
     } 
   };
 }
 
-/**
- * Shared helper for stream-based servers (TCP, TLS, Socket) to parse length-prefixed frames,
- * invoke the user data handler, and write back framed responses.
- */
-function setupStreamServerConnection(socket, server, handlers, onError) {
-  const onConnect = handlers.onConnect;
-  const onData = handlers.onData;
+function setupStreamServerConnection(socket, server, handlers, onError, onDestroy) {
+  const onConnect = handlers.onConnect || handlers.onConnection;
+  const onData = handlers.onData || handlers.onMessage;
   const onEnd = handlers.onEnd;
   const onClose = handlers.onClose;
 
@@ -530,6 +534,9 @@ function setupStreamServerConnection(socket, server, handlers, onError) {
     if (typeof onClose === 'function') {
       onClose(hadError, socket, server);
     }
+    if (typeof onDestroy === 'function') {
+      onDestroy(socket, server);
+    }
   });
 }
 
@@ -539,9 +546,10 @@ function createTcpServer(options = {}, handlerArg) {
   
   const handlers = resolveHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy || handlers.onDestroy;
 
   const server = net.createServer((socket) => {
-    setupStreamServerConnection(socket, server, handlers, onError);
+    setupStreamServerConnection(socket, server, handlers, onError, onDestroy);
   });
 
   server.on('error', (err) => {
@@ -559,7 +567,12 @@ function createTcpServer(options = {}, handlerArg) {
   return { 
     server, 
     close: (callback) => {
-      server.close(callback);
+      server.close((err) => {
+        if (typeof onDestroy === 'function') {
+          onDestroy(server);
+        }
+        if (typeof callback === 'function') callback(err);
+      });
     } 
   };
 }
@@ -570,6 +583,7 @@ function createTlsServer(options = {}, handlerArg) {
   
   const handlers = resolveHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy || handlers.onDestroy;
 
   const tlsOptions = {
     key: options.key,
@@ -579,7 +593,7 @@ function createTlsServer(options = {}, handlerArg) {
   };
 
   const server = tls.createServer(tlsOptions, (socket) => {
-    setupStreamServerConnection(socket, server, handlers, onError);
+    setupStreamServerConnection(socket, server, handlers, onError, onDestroy);
   });
 
   server.on('error', (err) => {
@@ -597,23 +611,30 @@ function createTlsServer(options = {}, handlerArg) {
   return { 
     server, 
     close: (callback) => {
-      server.close(callback);
+      server.close((err) => {
+        if (typeof onDestroy === 'function') {
+          onDestroy(server);
+        }
+        if (typeof callback === 'function') callback(err);
+      });
     } 
   };
 }
 
 function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
   const handlers = resolveHandlers(options, handlerArg);
-  const onConnect = handlers.onConnect;
-  const onData = handlers.onData;
+  const onConnect = handlers.onConnect || handlers.onConnection;
+  const onData = handlers.onData || handlers.onMessage;
   const onClose = handlers.onClose;
   const onEnd = handlers.onEnd;
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy || handlers.onDestroy;
 
   const secKey = req.headers['sec-websocket-key'];
   if (!secKey) {
     socket.destroy();
     if (typeof onClose === 'function') onClose(null, socket, server);
+    if (typeof onDestroy === 'function') onDestroy(socket, server);
     return;
   }
 
@@ -677,6 +698,14 @@ function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
     });
   });
 
+  socket.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, socket, server);
+    } else {
+      console.error('[WebSocket Server] Socket error:', err);
+    }
+  });
+
   socket.on('end', () => {
     if (typeof onEnd === 'function') {
       onEnd(socket, server);
@@ -687,6 +716,9 @@ function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
     if (typeof onClose === 'function') {
       onClose(hadError, socket, server);
     }
+    if (typeof onDestroy === 'function') {
+      onDestroy(socket, server);
+    }
   });
 }
 
@@ -695,6 +727,7 @@ function createWsServer(options = {}, handlerArg) {
   const host = options.host || '127.0.0.1';
   const handlers = resolveHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy || handlers.onDestroy;
 
   const server = http.createServer((req, res) => {
     if (typeof options.onHttpRequest === 'function') {
@@ -724,7 +757,10 @@ function createWsServer(options = {}, handlerArg) {
   return { 
     server, 
     close: (callback) => {
-      server.close(callback);
+      server.close((err) => {
+        if (typeof onDestroy === 'function') onDestroy(server);
+        if (typeof callback === 'function') callback(err);
+      });
     } 
   };
 }
@@ -734,6 +770,7 @@ function createWssServer(options = {}, handlerArg) {
   const host = options.host || '127.0.0.1';
   const handlers = resolveHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy || handlers.onDestroy;
 
   let certs = {};
   if (!options.key || !options.cert) {
@@ -821,7 +858,10 @@ function createWssServer(options = {}, handlerArg) {
       if (typeof options.onCloseServer === 'function') {
         options.onCloseServer(server);
       }
-      server.close(callback);
+      server.close((err) => {
+        if (typeof onDestroy === 'function') onDestroy(server);
+        if (typeof callback === 'function') callback(err);
+      });
     } 
   };
 }
@@ -829,10 +869,11 @@ function createWssServer(options = {}, handlerArg) {
 function createSocketServer(options = {}, handlerArg) {
   const socketPath = typeof options === 'string'
     ? options
-    : (options && (options.path || options.socketPath)) || DEFAULT_SOCKET_PATH;
+    : (options && (options.path || options.socketPath || (options.host && (options.host.includes('/') || options.host.includes('\\') || options.host.startsWith('.')) ? options.host : undefined))) || DEFAULT_SOCKET_PATH;
 
   const handlers = resolveHandlers(typeof options === 'object' ? options : {}, handlerArg);
   const onError = options.onError || handlers.onError;
+  const onDestroy = options.onDestroy || handlers.onDestroy;
 
   if (process.platform !== 'win32' && fs.existsSync(socketPath)) {
     try {
@@ -841,7 +882,7 @@ function createSocketServer(options = {}, handlerArg) {
   }
 
   const server = net.createServer((socket) => {
-    setupStreamServerConnection(socket, server, handlers, onError);
+    setupStreamServerConnection(socket, server, handlers, onError, onDestroy);
   });
 
   server.on('error', (err) => {
@@ -859,7 +900,19 @@ function createSocketServer(options = {}, handlerArg) {
   return { 
     server, 
     close: (callback) => {
-      server.close(callback);
+      server.close((err) => {
+        if (process.platform !== 'win32' && fs.existsSync(socketPath)) {
+          try {
+            fs.unlinkSync(socketPath);
+          } catch (_) {}
+        }
+        if (typeof onDestroy === 'function') {
+          onDestroy(server);
+        }
+        if (typeof callback === 'function') {
+          callback(err);
+        }
+      });
     } 
   };
 }
@@ -897,7 +950,7 @@ function createUdpClient(options = {}, genericClientHandler) {
   });
 
   return {
-    sendHttpRequestPayload: function (httpRequestDetails, timeoutMs = 5000) {
+    sendProtocolRequestPayload: function (httpRequestDetails, timeoutMs = 5000) {
       return new Promise((resolve, reject) => {
         const correlationId = crypto.randomUUID();
         const payload = {
@@ -939,15 +992,27 @@ function createBaseStreamClient(connectFn, genericClientHandler) {
 
   function ensureConnection() {
     return new Promise((resolve, reject) => {
-      if (socket && !socket.destroyed) {
+      if (socket && !socket.destroyed && socket.connecting === false) {
         return resolve(socket);
       }
 
       try {
-        socket = connectFn(() => resolve(socket));
+        socket = connectFn();
       } catch (err) {
         return reject(err);
       }
+
+      socket.once('connect', () => {
+        resolve(socket);
+      });
+
+      socket.on('error', (err) => {
+        reject(err);
+        for (const [, { reject: rejectPending }] of pendingRequests.entries()) {
+          rejectPending(err);
+        }
+        pendingRequests.clear();
+      });
 
       socket.on('data', (chunk) => {
         accumulatedBuffer = Buffer.concat([accumulatedBuffer, chunk]);
@@ -961,7 +1026,7 @@ function createBaseStreamClient(connectFn, genericClientHandler) {
               pendingRequests.delete(requestId);
               
               const finalResult = typeof genericClientHandler === 'function'
-                ? genericClientHandler(responsePacket)
+                ? genericClientHandler(responsePacket, socket)
                 : responsePacket;
 
               resolvePending(finalResult);
@@ -972,19 +1037,13 @@ function createBaseStreamClient(connectFn, genericClientHandler) {
         });
       });
 
-      socket.on('error', (err) => {
-        for (const [, { reject: rejectPending }] of pendingRequests.entries()) {
-          rejectPending(err);
-        }
-        pendingRequests.clear();
-      });
-
       socket.on('close', () => { socket = null; });
     });
   }
 
   return {
-    sendHttpRequestPayload: function (httpRequestDetails, timeout = 5000) {
+    get socket() { return socket; },
+    sendProtocolRequestPayload: function (httpRequestDetails, timeout = 5000) {
       return ensureConnection().then(() => {
         requestCounter = (requestCounter + 1) % 1000000;
         const requestId = `req_${Date.now()}_${requestCounter}`;
@@ -1022,16 +1081,16 @@ function createBaseStreamClient(connectFn, genericClientHandler) {
 function createTcpClient(options = {}, genericClientHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 7000;
-  return createBaseStreamClient((onConnect) => net.createConnection({ host, port }, onConnect), genericClientHandler);
+  return createBaseStreamClient(() => net.createConnection({ host, port }), genericClientHandler);
 }
 
 function createTlsClient(options = {}, genericClientHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 7001;
-  return createBaseStreamClient((onConnect) => tls.connect({
+  return createBaseStreamClient(() => tls.connect({
     host, port, key: options.key, cert: options.cert, ca: options.ca,
     rejectUnauthorized: options.rejectUnauthorized !== false
-  }, onConnect), genericClientHandler);
+  }), genericClientHandler);
 }
 
 function createSocketClient(options = {}, genericClientHandler) {
@@ -1040,14 +1099,14 @@ function createSocketClient(options = {}, genericClientHandler) {
     : (options && (options.path || options.socketPath || (options.host && (options.host.includes('/') || options.host.includes('\\') || options.host.startsWith('.')) ? options.host : undefined))) || DEFAULT_SOCKET_PATH;
 
   return createBaseStreamClient(
-    (onConnect) => net.createConnection({ path: socketPath }, onConnect),
+    () => net.createConnection({ path: socketPath }),
     genericClientHandler
   );
 }
 
 function createHttpClient(options = {}, genericClientHandler) {
   return {
-    sendHttpRequestPayload: async function (httpRequestDetails) {
+    sendProtocolRequestPayload: async function (httpRequestDetails) {
       const scheme = options.useHttps ? 'https' : 'http';
       const targetHost = options.host || '127.0.0.1';
       const targetPort = options.port || (options.useHttps ? 443 : 80);
@@ -1150,7 +1209,7 @@ function createGenericWsClient(isSecure, options = {}, genericClientHandler) {
   }
 
   return {
-    sendHttpRequestPayload: async function (httpRequestDetails) {
+    sendProtocolRequestPayload: async function (httpRequestDetails) {
       await connect();
       return new Promise((resolve, reject) => {
         const reqId = ++requestIdCounter;
@@ -1239,7 +1298,7 @@ async function httpProxyToProtocol(httpRequestDetails, options = {}) {
   const shouldAutoClose = createdInternally && options.autoClose !== false && options.keepAlive !== true;
 
   try {
-    const proxyResponse = await protocolClient.sendHttpRequestPayload(httpRequestDetails);
+    const proxyResponse = await protocolClient.sendProtocolRequestPayload(httpRequestDetails);
     const result = {
       protocolClient: protocolClient,
       response: {
@@ -1333,7 +1392,7 @@ async function udpProxyToProtocol(udpMessageDetails, options = {}) {
   };
 
   try {
-    const proxyResponse = await protocolClient.sendHttpRequestPayload(httpRequestDetails);
+    const proxyResponse = await protocolClient.sendProtocolRequestPayload(httpRequestDetails);
     const result = {
       protocolClient: protocolClient,
       response: {
@@ -1371,7 +1430,7 @@ async function udpProxyToProtocol(udpMessageDetails, options = {}) {
 function createRequestHandler(options = {}, setProtocolClient = (client) => {
     activeProtocolClient = client;
   }, handlerArg) {
-  const { onConnect, onData, onClose, onEnd } = resolveHandlers(options, handlerArg);
+  const { onConnect, onData, onClose, onEnd, onError, onDestroy } = resolveHandlers(options, handlerArg);
   
   const authenticate = options.authenticate !== undefined
     ? options.authenticate
@@ -1407,6 +1466,12 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
       bodyChunks.push(chunk);
     });
 
+    req.on('error', (err) => {
+      if (typeof onError === 'function') {
+        onError(err, req, res);
+      }
+    });
+
     req.on('end', async () => {
       if (typeof onEnd === 'function') {
         onEnd(req, res);
@@ -1414,13 +1479,18 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
 
       const requestBody = Buffer.concat(bodyChunks).toString('utf-8');
 
-      const httpRequestDetails = {
+      let httpRequestDetails = {
         protocol: protocol,
         url: req.url,
         method: req.method,
         headers: req.headers,
         body: requestBody
       };
+
+      if (typeof options.onRequestModified === 'function') {
+        const modified = options.onRequestModified(httpRequestDetails, req, res);
+        if (modified) httpRequestDetails = modified;
+      }
 
       if (typeof authenticate === 'function') {
         try {
@@ -1433,6 +1503,7 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
               }));
             }
             if (typeof onClose === 'function') onClose(req, res);
+            if (typeof onDestroy === 'function') onDestroy(req, res);
             return;
           }
         } catch (authErr) {
@@ -1444,6 +1515,7 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
             }));
           }
           if (typeof onClose === 'function') onClose(req, res);
+          if (typeof onDestroy === 'function') onDestroy(req, res);
           return;
         }
       }
@@ -1464,6 +1536,7 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
 
         if (res.writableEnded || res.finished) {
           if (typeof onClose === 'function') onClose(req, res);
+          if (typeof onDestroy === 'function') onDestroy(req, res);
           return;
         }
 
@@ -1472,9 +1545,18 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
         }
 
         if (processorResult && (processorResult.status !== undefined || processorResult.body !== undefined)) {
-          const responseStatus = processorResult.status || 200;
-          const responseHeaders = processorResult.headers || { 'content-type': 'text/plain' };
+          let responseStatus = processorResult.status || 200;
+          let responseHeaders = processorResult.headers || { 'content-type': 'text/plain' };
           let responseBody = processorResult.body;
+
+          if (typeof options.onResponseReceived === 'function') {
+            const transformedRes = options.onResponseReceived({ status: responseStatus, headers: responseHeaders, body: responseBody }, httpRequestDetails);
+            if (transformedRes) {
+              responseStatus = transformedRes.status || responseStatus;
+              responseHeaders = transformedRes.headers || responseHeaders;
+              responseBody = transformedRes.body !== undefined ? transformedRes.body : responseBody;
+            }
+          }
 
           if (typeof responseBody === 'object' && responseBody !== null && !Buffer.isBuffer(responseBody)) {
             responseBody = JSON.stringify(responseBody);
@@ -1486,6 +1568,9 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
           }
         }
       } catch (err) {
+        if (typeof onError === 'function') {
+          onError(err, req, res);
+        }
         if (!res.headersSent) {
           res.writeHead(500, { 'content-type': 'application/json' });
           res.end(JSON.stringify({
@@ -1497,6 +1582,9 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
 
       if (typeof onClose === 'function') {
         onClose(req, res);
+      }
+      if (typeof onDestroy === 'function') {
+        onDestroy(req, res);
       }
     });
   };
@@ -1539,8 +1627,20 @@ function createHttpServer(options = {}, requestHandlerArg) {
 
   return {
     server: server,
+    close: (callback) => {
+      server.close((err) => {
+        if (typeof options.onDestroy === 'function') {
+          options.onDestroy(server);
+        }
+        if (typeof callback === 'function') callback(err);
+      });
+    },
     getProtocolClient: () => localActiveProtocolClient
   };
+}
+
+function createHttpsServer(options = {}, requestHandlerArg) {
+  return createHttpServer({ ...options, useHttps: true }, requestHandlerArg);
 }
 
 // ============================================================================
@@ -1550,9 +1650,16 @@ function createHttpServer(options = {}, requestHandlerArg) {
 function createUdpProxyServer(options = {}, proxyHandler) {
   const host = options.udpHost || options.host || '127.0.0.1';
   const port = options.udpPort || options.port || 41234;
-  const { onConnect, onData, onClose, onEnd } = resolveHandlers(options, proxyHandler);
+  const handlers = resolveHandlers(options, proxyHandler);
+  const onConnect = handlers.onConnect || handlers.onConnection;
+  const onMessage = handlers.onMessage || handlers.onMessageReceived;
+  const onData = handlers.onData || handlers.onResponseReceived;
+  const onClose = handlers.onClose;
+  const onEnd = handlers.onEnd;
+  const onError = handlers.onError;
+  const onDestroy = handlers.onDestroy;
   const authenticate = options.authenticate !== undefined ? options.authenticate : null;
-  const handler = onData || proxyHandler || (options.protocol ? udpProxyToProtocol : null);
+  const defaultForwarder = options.protocol ? udpProxyToProtocol : null;
 
   let localActiveProtocolClient = options.protocolClient || null;
   const setProtocolClient = (client) => {
@@ -1568,6 +1675,14 @@ function createUdpProxyServer(options = {}, proxyHandler) {
     });
   }
 
+  server.on('error', (err) => {
+    if (typeof onError === 'function') {
+      onError(err, null, null, server);
+    } else {
+      console.error('[UDP Proxy Server] Socket error:', err);
+    }
+  });
+
   server.on('message', async (msg, rinfo) => {
     let correlationId = null;
     let responsePayload = {};
@@ -1576,13 +1691,18 @@ function createUdpProxyServer(options = {}, proxyHandler) {
       const parsedData = JSON.parse(msg.toString('utf-8'));
       correlationId = parsedData.correlationId;
 
-      const udpMessageDetails = {
-        protocol: parsedData.protocol || 'udp',
+      let udpMessageDetails = {
+        protocol: parsedData.protocol || options.protocol || 'udp',
         url: parsedData.url || '/',
         method: parsedData.method || 'GET',
         headers: parsedData.headers || {},
         body: parsedData.body || ''
       };
+
+      if (typeof handlers.onRequestModified === 'function') {
+        const modified = handlers.onRequestModified(udpMessageDetails, rinfo, server);
+        if (modified) udpMessageDetails = modified;
+      }
 
       if (typeof authenticate === 'function') {
         const isAllowed = await authenticate(udpMessageDetails);
@@ -1598,22 +1718,38 @@ function createUdpProxyServer(options = {}, proxyHandler) {
         }
       }
 
+      if (typeof onMessage === 'function') {
+        const transformedMsg = await onMessage(udpMessageDetails, rinfo, server);
+        if (transformedMsg !== undefined) {
+          udpMessageDetails = typeof transformedMsg === 'object' && transformedMsg !== null 
+            ? { ...udpMessageDetails, ...transformedMsg } 
+            : udpMessageDetails;
+        }
+      }
+
       let proxyResult;
-      if (handler === udpProxyToProtocol) {
-        proxyResult = await udpProxyToProtocol(udpMessageDetails, options);
-      } else if (typeof handler === 'function') {
-        proxyResult = await handler(udpMessageDetails, rinfo, server);
+      if (defaultForwarder) {
+        proxyResult = await defaultForwarder(udpMessageDetails, options);
+      } else if (typeof proxyHandler === 'function') {
+        proxyResult = await proxyHandler(udpMessageDetails, rinfo, server);
       } else {
-        proxyResult = { status: 404, body: { error: 'Not Found: No UDP proxy handler configured' } };
+        proxyResult = { status: 404, body: { error: 'Not Found: No UDP proxy handler or protocol configured' } };
       }
 
       if (proxyResult && proxyResult.protocolClient) {
         setProtocolClient(proxyResult.protocolResult || proxyResult.protocolClient);
       }
 
-      const response = proxyResult && proxyResult.response
+      let response = proxyResult && proxyResult.response
         ? proxyResult.response
         : (proxyResult || { status: 200, headers: {}, body: '' });
+
+      if (typeof onData === 'function') {
+        const transformedRes = await onData(response, udpMessageDetails, rinfo, server);
+        if (transformedRes !== undefined) {
+          response = transformedRes;
+        }
+      }
 
       let responseBody = response.body;
       if (typeof responseBody === 'object' && responseBody !== null && !Buffer.isBuffer(responseBody)) {
@@ -1627,6 +1763,9 @@ function createUdpProxyServer(options = {}, proxyHandler) {
         body: responseBody !== undefined ? responseBody : ''
       };
     } catch (err) {
+      if (typeof onError === 'function') {
+        onError(err, msg, rinfo, server);
+      }
       responsePayload = {
         correlationId,
         status: 500,
@@ -1651,9 +1790,12 @@ function createUdpProxyServer(options = {}, proxyHandler) {
 
   return {
     server: server,
-    close: () => {
+    close: (callback) => {
       if (typeof onEnd === 'function') onEnd(server);
-      server.close();
+      server.close((err) => {
+        if (typeof onDestroy === 'function') onDestroy(server);
+        if (typeof callback === 'function') callback(err);
+      });
     },
     getProtocolClient: () => localActiveProtocolClient
   };
@@ -1669,6 +1811,7 @@ module.exports = {
 
   // Direct Server / Request Handlers / Handlers / Clients
   createHttpServer,
+  createHttpsServer,
   createUdpProxyServer,
   createRequestHandler,
   httpProxyToProtocol,
@@ -1694,6 +1837,8 @@ module.exports = {
   parseFrames,
   frameStreamMessage,
   parseStreamFrames,
+  buildWsFrame,
+  parseWsFrames,
   framing: {
     frameMessage,
     parseFrames,
@@ -1703,6 +1848,8 @@ module.exports = {
 
   // Server Creators
   servers: {
+    http: (opts, handler) => createHttpServer({ ...opts, useHttps: false }, handler),
+    https: (opts, handler) => createHttpServer({ ...opts, useHttps: true }, handler),
     udp: createUdpServer,
     udpProxy: createUdpProxyServer,
     tcp: createTcpServer,

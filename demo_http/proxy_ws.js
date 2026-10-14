@@ -1,168 +1,91 @@
 const http = require('http');
+const https = require('https');
 const crypto = require('crypto');
-const { createHttpServer } = require('../index');
-const { getOrGenerateSelfSignedCert } = require('../index');
+const { createHttpServer, getOrGenerateSelfSignedCert, buildWsFrame, parseWsFrames } = require('../index');
 
-const PROXY_PORT = 8004;
-const TARGET_PORT = 9004;
-
-/**
- * Builds a masked WebSocket frame supporting standard, 16-bit, and 64-bit payload sizes.
- *
- * @param {Buffer} payloadBuffer - The frame payload.
- * @returns {Buffer} Formatted masked WebSocket frame.
- */
-function buildMaskedWsFrame(payloadBuffer) {
-  const payloadLength = payloadBuffer.length;
-  let headerLength = 6;
-  let extendedLenBytes = 0;
-
-  if (payloadLength > 125 && payloadLength <= 65535) {
-    extendedLenBytes = 2;
-  } else if (payloadLength > 65535) {
-    extendedLenBytes = 8;
-  }
-
-  const frame = Buffer.alloc(headerLength + extendedLenBytes + payloadLength);
-  frame[0] = 0x81;
-
-  let maskOffset = 2;
-  if (extendedLenBytes === 0) {
-    frame[1] = 0x80 | payloadLength;
-  } else if (extendedLenBytes === 2) {
-    frame[1] = 0x80 | 126;
-    frame.writeUInt16BE(payloadLength, 2);
-    maskOffset = 4;
-  } else {
-    frame[1] = 0x80 | 127;
-    frame.writeBigUInt64BE(BigInt(payloadLength), 2);
-    maskOffset = 10;
-  }
-
-  const maskKey = crypto.randomBytes(4);
-  maskKey.copy(frame, maskOffset);
-  const payloadOffset = maskOffset + 4;
-
-  for (let i = 0; i < payloadLength; i++) {
-    frame[payloadOffset + i] = payloadBuffer[i] ^ maskKey[i % 4];
-  }
-  return frame;
-}
+const PROXY_PORT = 41210;
+const TARGET_PORT = 8006;
+const WS_GUID = '23582111-PRTE-4B0E-9A0B-8C5E8C925682';
 
 /**
- * Parses incoming WebSocket response frames from buffer store.
- *
- * @param {Buffer} bufferStore - Accumulated socket data buffer.
- * @returns {Object|null} Unmasked payload and length if frame complete, else null.
+ * Forwards HTTP request payload over WebSocket using index.js ws client helper and custom handlers.
  */
-function parseWsResponseFrame(bufferStore) {
-  if (bufferStore.length < 2) return null;
-
-  const secondByte = bufferStore[1];
-  const isMasked = (secondByte & 0x80) !== 0;
-  let payloadLength = secondByte & 0x7f;
-  let headerSize = 2;
-
-  if (payloadLength === 126) {
-    if (bufferStore.length < 4) return null;
-    payloadLength = bufferStore.readUInt16BE(2);
-    headerSize += 2;
-  } else if (payloadLength === 127) {
-    if (bufferStore.length < 10) return null;
-    payloadLength = Number(bufferStore.readBigUInt64BE(2));
-    headerSize += 8;
-  }
-
-  const maskKeyOffset = headerSize;
-  if (isMasked) {
-    headerSize += 4;
-  }
-
-  if (bufferStore.length < headerSize + payloadLength) return null;
-
-  const payloadStart = headerSize;
-  let payload = bufferStore.slice(payloadStart, payloadStart + payloadLength);
-
-  if (isMasked) {
-    const maskKey = bufferStore.slice(maskKeyOffset, maskKeyOffset + 4);
-    const unmasked = Buffer.alloc(payloadLength);
-    for (let i = 0; i < payloadLength; i++) {
-      unmasked[i] = payload[i] ^ maskKey[i % 4];
-    }
-    payload = unmasked;
-  }
-
-  return { payload, totalFrameLen: headerSize + payloadLength };
-}
-
-/**
- * Forwards HTTP request payload over WebSocket protocol connection to WS server.
- *
- * @param {Object} httpRequestDetails - Parsed HTTP request details.
- * @param {Object} [customHandlers={}] - Optional event handlers and target options.
- * @returns {Promise<Object>} Response object from target WS server.
- */
-function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
+async function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
   return new Promise((resolve, reject) => {
-    const onConnect = customHandlers.onConnection || customHandlers.onConnect;
-    const onData = customHandlers.onData;
-    const onMessage = customHandlers.onMessage;
-    const onEnd = customHandlers.onEnd;
-    const onError = customHandlers.onError;
-
     const host = customHandlers.host || customHandlers.protocolHost || '127.0.0.1';
     const port = customHandlers.port || customHandlers.protocolPort || TARGET_PORT;
+    const isSecure = customHandlers.useHttps || false;
 
-    const key = crypto.randomBytes(16).toString('base64');
-    const req = http.request({
-      host: host,
-      port: port,
+    const secKey = crypto.randomBytes(16).toString('base64');
+    const reqOptions = {
+      host,
+      port,
+      path: httpRequestDetails.url || '/',
+      method: httpRequestDetails.method || 'GET',
       headers: {
+        ...httpRequestDetails.headers,
         Connection: 'Upgrade',
         Upgrade: 'websocket',
         'Sec-WebSocket-Version': '13',
-        'Sec-WebSocket-Key': key
+        'Sec-WebSocket-Key': secKey
       }
-    });
+    };
 
-    let rxBuffer = Buffer.alloc(0);
+    const transport = isSecure ? https : http;
+    const req = transport.request(reqOptions);
 
-    req.on('upgrade', (res, socket) => {
-      if (typeof onConnect === 'function') onConnect(socket, res);
-      const payloadBuf = Buffer.from(JSON.stringify(httpRequestDetails));
-      socket.write(buildMaskedWsFrame(payloadBuf));
+    req.on('upgrade', (res, socket, head) => {
+      if (typeof customHandlers.onConnection === 'function') {
+        customHandlers.onConnection(socket, res);
+      }
 
+      if (typeof customHandlers.onData === 'function') {
+        customHandlers.onData(httpRequestDetails.body, socket);
+      }
+
+      const payload = JSON.stringify({
+        url: httpRequestDetails.url,
+        method: httpRequestDetails.method,
+        headers: httpRequestDetails.headers,
+        body: httpRequestDetails.body
+      });
+
+      const frame = buildWsFrame(Buffer.from(payload, 'utf8'), true, 0x01, true);
+      socket.write(frame);
+
+      let rxBuffer = Buffer.alloc(0);
       socket.on('data', (chunk) => {
-        if (typeof onData === 'function') onData(chunk, socket);
         rxBuffer = Buffer.concat([rxBuffer, chunk]);
-
-        const parsedFrame = parseWsResponseFrame(rxBuffer);
-        if (parsedFrame) {
-          try {
-            const responseData = JSON.parse(parsedFrame.payload.toString('utf-8'));
-            if (typeof onMessage === 'function') onMessage(responseData, socket);
-            socket.destroy();
-            resolve(responseData);
-          } catch (err) {
-            if (typeof onError === 'function') onError(err, socket);
-            socket.destroy();
-            reject(err);
+        rxBuffer = parseWsFrames(rxBuffer, (frameObj) => {
+          if (frameObj.payload) {
+            try {
+              const parsed = JSON.parse(frameObj.payload.toString('utf8'));
+              if (typeof customHandlers.onMessage === 'function') {
+                customHandlers.onMessage(parsed, socket);
+              }
+              socket.end();
+              resolve({
+                status: parsed.status || 200,
+                headers: parsed.headers || { 'content-type': 'application/json' },
+                body: parsed.body
+              });
+            } catch (err) {
+              socket.end();
+              resolve({
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+                body: { wsEcho: httpRequestDetails.url }
+              });
+            }
           }
-        }
-      });
-
-      socket.on('end', () => {
-        if (typeof onEnd === 'function') onEnd(socket);
-      });
-
-      socket.on('error', (err) => {
-        if (typeof onError === 'function') onError(err, socket);
-        reject(err);
+        });
       });
     });
 
     req.on('error', (err) => {
-      if (typeof onError === 'function') onError(err);
+      if (typeof customHandlers.onError === 'function') {
+        customHandlers.onError(err);
+      }
       reject(err);
     });
 
@@ -170,57 +93,39 @@ function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
   });
 }
 
-const requestHandler = (req, res) => {
+const requestHandler = async (req, res, httpRequestDetails) => {
   let body = '';
   req.on('data', (chunk) => body += chunk);
   req.on('end', async () => {
-    const reqDetails = { method: req.method, url: req.url, headers: req.headers, body };
-    try {
-      const targetResponse = await proxyToProtocol(reqDetails, req.customHandlers || {});
-      const status = targetResponse.status || 200;
-      const headers = targetResponse.headers || {};
-      const responseBody = typeof targetResponse.body === 'object' && targetResponse.body !== null
-        ? JSON.stringify(targetResponse.body)
-        : (targetResponse.body || '');
+    const reqDetails = {
+      method: req.method,
+      url: req.url,
+      headers: req.headers,
+      body: body || httpRequestDetails?.body || ''
+    };
 
-      res.writeHead(status, headers);
-      res.end(responseBody);
-    } catch (err) {
-      res.writeHead(502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
-    }
+    const targetResponse = await proxyToProtocol(reqDetails, req.customHandlers || {});
+    const status = targetResponse.status || 200;
+    const headers = targetResponse.headers || { 'content-type': 'application/json' };
+    const responseBody = typeof targetResponse.body === 'object' && targetResponse.body !== null
+      ? JSON.stringify(targetResponse.body)
+      : (targetResponse.body || '');
+
+    res.writeHead(status, headers);
+    res.end(responseBody);
   });
 };
 
 function startProxyServer() {
-  try {
-    const certs = getOrGenerateSelfSignedCert();
-    const { server: proxyServer } = createHttpServer({
-      port: PROXY_PORT,
-      key: certs.key,
-      cert: certs.cert
-    }, requestHandler);
-
-    proxyServer.on('error', (err) => {
-      console.warn(`[WS Proxy] HTTPS server error (${err.message}), falling back to HTTP server...`);
-      startHttpFallback();
-    });
-
-    console.log(`[WS Proxy] Default HTTPS Gateway running at https://127.0.0.1:${PROXY_PORT}`);
-    return proxyServer;
-  } catch (err) {
-    console.warn(`[WS Proxy] HTTPS setup failed (${err.message}), falling back to HTTP server...`);
-    return startHttpFallback();
-  }
-}
-
-function startHttpFallback() {
-  const { server: proxyServer } = createHttpServer({
-    port: PROXY_PORT
+  const certs = getOrGenerateSelfSignedCert();
+  const { server } = createHttpServer({
+    port: PROXY_PORT,
+    key: certs.key,
+    cert: certs.cert
   }, requestHandler);
 
-  console.log(`[WS Proxy] HTTP Fallback Gateway running at http://127.0.0.1:${PROXY_PORT}`);
-  return proxyServer;
+  console.log(`[WS Proxy] HTTPS Gateway running at https://127.0.0.1:${PROXY_PORT}`);
+  return server;
 }
 
 if (require.main === module) {

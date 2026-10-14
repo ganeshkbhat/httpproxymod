@@ -3,7 +3,7 @@ const { createHttpServer } = require('../index');
 const { getOrGenerateSelfSignedCert } = require('../index');
 const { frameMessage, parseFrames } = require('../index');
 
-const PROXY_PORT = 8006;
+const PROXY_PORT = 41210;
 const SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\demo_socket'
   : '/tmp/demo_socket.sock';

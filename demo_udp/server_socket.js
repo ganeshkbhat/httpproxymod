@@ -1,33 +1,40 @@
-const { servers, parseStreamFrames, frameStreamMessage, DEFAULT_SOCKET_PATH } = require('../index.js');
+const { servers, DEFAULT_SOCKET_PATH } = require('../index.js');
 
 function createTargetSocketServer(socketPath = DEFAULT_SOCKET_PATH) {
-  let rxBuffer = Buffer.alloc(0);
   return servers.socket({ path: socketPath }, {
-    onConnect: () => {
-      rxBuffer = Buffer.alloc(0);
+    onConnect: (socket, server) => {
+      console.log(`[Socket Target Server] Client connected on path ${socketPath}`);
     },
-    onData: async (chunk, socket) => {
-      rxBuffer = Buffer.concat([rxBuffer, chunk]);
-      rxBuffer = parseStreamFrames(rxBuffer, (messageBuffer) => {
-        try {
-          const packet = JSON.parse(messageBuffer.toString());
-          const response = {
-            requestId: packet.requestId,
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ server: 'Socket Target Server', received: packet.payload })
-          };
-          socket.write(frameStreamMessage(Buffer.from(JSON.stringify(response))));
-        } catch (err) {
-          console.error('[Socket Target Error]', err);
-        }
-      });
+    onData: async (requestData, socket, server, packet) => {
+      try {
+        console.log('[Socket Target Server] Received request data:', requestData);
+        
+        return {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ 
+            server: 'Socket Target Server', 
+            received: requestData 
+          })
+        };
+      } catch (err) {
+        console.error('[Socket Target Error]', err);
+        return {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ error: 'Internal Server Error', details: err.message })
+        };
+      }
+    },
+    onClose: (hadError, socket, server) => {
+      console.log('[Socket Target Server] Client disconnected');
     }
   });
 }
 
 if (require.main === module) {
   createTargetSocketServer();
+  console.log('[Socket Target Server] Running. Press Ctrl+C to stop.');
 }
 
 module.exports = { createTargetSocketServer };

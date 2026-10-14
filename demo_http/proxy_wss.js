@@ -3,8 +3,8 @@ const crypto = require('crypto');
 const { createHttpServer, clients } = require('../index');
 const { getOrGenerateSelfSignedCert } = require('../index');
 
-const PROXY_PORT = 8005;
-const TARGET_PORT = 9005;
+const PROXY_PORT = 41210;
+const TARGET_PORT = 8007;
 const WS_GUID = '23582111-PRTE-4B0E-9A0B-8C5E8C925682';
 
 /**

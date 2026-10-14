@@ -73,7 +73,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpUdpClient = clients.udp({ port: 41230 });
 
-    const res = await udpUdpClient.sendHttpRequestPayload({ url: '/test-udp', method: 'GET', headers: {}, body: 'hello udp' });
+    const res = await udpUdpClient.sendProtocolRequestPayload({ url: '/test-udp', method: 'GET', headers: {}, body: 'hello udp' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -102,7 +102,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpHttpClient = clients.udp({ port: 41231 });
 
-    const res = await udpHttpClient.sendHttpRequestPayload({ url: '/test-http', method: 'GET', headers: {}, body: 'hello http' });
+    const res = await udpHttpClient.sendProtocolRequestPayload({ url: '/test-http', method: 'GET', headers: {}, body: 'hello http' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -132,7 +132,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpHttpsClient = clients.udp({ port: 41232 });
 
-    const res = await udpHttpsClient.sendHttpRequestPayload({ url: '/test-https', method: 'POST', headers: {}, body: 'hello https' });
+    const res = await udpHttpsClient.sendProtocolRequestPayload({ url: '/test-https', method: 'POST', headers: {}, body: 'hello https' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -153,7 +153,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpTcpClient = clients.udp({ port: 41233 });
 
-    const res = await udpTcpClient.sendHttpRequestPayload({ url: '/test-tcp', method: 'GET', headers: {}, body: 'hello tcp' });
+    const res = await udpTcpClient.sendProtocolRequestPayload({ url: '/test-tcp', method: 'GET', headers: {}, body: 'hello tcp' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -177,7 +177,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpTlsClient = clients.udp({ port: 41234 });
 
-    const res = await udpTlsClient.sendHttpRequestPayload({ url: '/test-tls', method: 'GET', headers: {}, body: 'hello tls' });
+    const res = await udpTlsClient.sendProtocolRequestPayload({ url: '/test-tls', method: 'GET', headers: {}, body: 'hello tls' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -198,7 +198,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpSocketClient = clients.udp({ port: 41235 });
 
-    const res = await udpSocketClient.sendHttpRequestPayload({ url: '/test-socket', method: 'GET', headers: {}, body: 'hello socket' });
+    const res = await udpSocketClient.sendProtocolRequestPayload({ url: '/test-socket', method: 'GET', headers: {}, body: 'hello socket' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -219,7 +219,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpWsClient = clients.udp({ port: 41236 });
 
-    const res = await udpWsClient.sendHttpRequestPayload({ url: '/test-ws', method: 'GET', headers: {}, body: 'hello ws' });
+    const res = await udpWsClient.sendProtocolRequestPayload({ url: '/test-ws', method: 'GET', headers: {}, body: 'hello ws' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
@@ -243,7 +243,7 @@ describe('UDP Proxy Protocol Integration Test Suite', function () {
     });
     udpWssClient = clients.udp({ port: 41237 });
 
-    const res = await udpWssClient.sendHttpRequestPayload({ url: '/test-wss', method: 'GET', headers: {}, body: 'hello wss' });
+    const res = await udpWssClient.sendProtocolRequestPayload({ url: '/test-wss', method: 'GET', headers: {}, body: 'hello wss' });
     expect(res).to.be.an('object');
     expect(res.status).to.equal(200);
     const body = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;

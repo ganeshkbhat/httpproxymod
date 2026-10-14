@@ -5,7 +5,7 @@ const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
  */
 function createUdpToHttpProxy(options = {}, customLifecycle = {}) {
   const targetHost = options.targetHost || options.protocolHost || '127.0.0.1';
-  const targetPort = options.targetPort || options.protocolPort || 8080;
+  const targetPort = options.targetPort || options.protocolPort || 8001;
 
   const serverOptions = {
     udpHost: options.udpHost || options.host || '127.0.0.1',

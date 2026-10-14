@@ -1,6 +1,6 @@
 const { createHttpServer: createServer } = require('../index');
 
-function createHttpServer(port = 9007, onData) {
+function createHttpServer(port = 8001, onData) {
   const defaultOnData = (data) => ({
     protocol: 'HTTP',
     status: 200,

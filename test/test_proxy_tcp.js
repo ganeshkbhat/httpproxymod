@@ -3,7 +3,7 @@ const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_tcp');
 const { frameMessage, parseFrames } = require('../index');
 
-const TARGET_PORT = 9002;
+const TARGET_PORT = 8003;
 
 describe('TCP Proxy Module (proxy_tcp.js)', function () {
   this.timeout(5000);
@@ -17,11 +17,15 @@ describe('TCP Proxy Module (proxy_tcp.js)', function () {
       socket.on('data', (chunk) => {
         rxBuffer = Buffer.concat([rxBuffer, chunk]);
         rxBuffer = parseFrames(rxBuffer, (messageBuffer) => {
-          const parsed = JSON.parse(messageBuffer.toString('utf-8'));
+          const packet = JSON.parse(messageBuffer.toString('utf-8'));
+          const requestId = packet.requestId;
+          const payload = packet.payload || packet;
+
           const responsePayload = {
+            requestId,
             status: 200,
             headers: { 'content-type': 'application/json' },
-            body: { receivedUrl: parsed.url, success: true }
+            body: { receivedUrl: payload.url, success: true }
           };
           const responseFrame = frameMessage(Buffer.from(JSON.stringify(responsePayload)));
           socket.write(responseFrame, () => {
@@ -106,17 +110,21 @@ describe('TCP Proxy Module (proxy_tcp.js)', function () {
       onError: (err) => { errorTriggered = true; }
     };
 
+    // Temporarily close mockTargetServer so port 8003 is down
+    await new Promise((resolve) => mockTargetServer.close(resolve));
+
     try {
-      await new Promise((resolve, reject) => {
-        const socket = net.createConnection({ host: '127.0.0.1', port: 9999 });
-        socket.on('error', (err) => {
-          if (customHandlers.onError) customHandlers.onError(err);
-          socket.destroy();
-          reject(err);
-        });
-      });
+      await proxyToProtocol({
+        method: 'GET',
+        url: '/fail',
+        headers: {},
+        body: ''
+      }, customHandlers);
     } catch (err) {
       expect(err).to.be.an.instanceOf(Error);
+    } finally {
+      // Restart mockTargetServer for clean teardown
+      await new Promise((resolve) => mockTargetServer.listen(TARGET_PORT, '127.0.0.1', resolve));
     }
 
     expect(errorTriggered).to.be.true;

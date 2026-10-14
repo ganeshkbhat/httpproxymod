@@ -5,7 +5,7 @@ const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
  */
 function createUdpToHttpsProxy(options = {}, customLifecycle = {}) {
   const targetHost = options.targetHost || options.protocolHost || '127.0.0.1';
-  const targetPort = options.targetPort || options.protocolPort || 8443;
+  const targetPort = options.targetPort || options.protocolPort || 8002;
 
   const serverOptions = {
     udpHost: options.udpHost || options.host || '127.0.0.1',
@@ -13,7 +13,8 @@ function createUdpToHttpsProxy(options = {}, customLifecycle = {}) {
     protocol: 'https',
     protocolHost: targetHost,
     protocolPort: targetPort,
-    rejectUnauthorized: options.rejectUnauthorized !== false,
+    // Set rejectUnauthorized to false to accept self-signed certificates in development
+    rejectUnauthorized: options.rejectUnauthorized !== undefined ? options.rejectUnauthorized : false,
     ...options
   };
 

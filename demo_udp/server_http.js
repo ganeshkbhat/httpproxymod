@@ -1,6 +1,6 @@
 const { createHttpServer } = require('../index.js');
 
-function createTargetHttpServer(port = 8080) {
+function createTargetHttpServer(port = 8001) {
   return createHttpServer({
     port,
     requestHandler: async (req, res, details) => {
@@ -20,7 +20,7 @@ function createTargetHttpServer(port = 8080) {
 }
 
 if (require.main === module) {
-  createTargetHttpServer(process.env.PORT ? parseInt(process.env.PORT) : 8080);
+  createTargetHttpServer(process.env.PORT ? parseInt(process.env.PORT) : 8001);
 }
 
 module.exports = { createTargetHttpServer };

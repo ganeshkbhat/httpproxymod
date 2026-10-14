@@ -4,7 +4,7 @@ const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_wss');
 const { generateSelfSignedCert } = require('../index');
 
-const TARGET_PORT = 9005;
+const TARGET_PORT = 8007;
 const WS_GUID = '23582111-PRTE-4B0E-9A0B-8C5E8C925682';
 
 describe('WSS Proxy Module (proxy_wss.js)', function () {

@@ -1,45 +1,55 @@
-const { servers, parseStreamFrames, frameStreamMessage, getCerts } = require('../index.js');
+const {
+  getCerts,
+  servers: { tls: createTlsServer }
+} = require('../index.js');
 
-function createTargetTlsServer(port = 7001, certs) {
-  const resolvedCerts = certs || getCerts();
-  let rxBuffer = Buffer.alloc(0);
+function startTlsServer(port = 8004, hostOrCerts = '127.0.0.1', customHandler) {
+  const certs = getCerts();
+  let portNum = typeof port === 'number' ? port : (port?.port || 8004);
+  let host = '127.0.0.1';
+  let handler = customHandler;
 
-  return servers.tls({
-    port,
-    host: '127.0.0.1',
-    key: resolvedCerts.key,
-    cert: resolvedCerts.cert,
-    rejectUnauthorized: false
-  }, {
-    onConnect: () => {
-      rxBuffer = Buffer.alloc(0);
-    },
-    onData: async (chunk, socket) => {
-      rxBuffer = Buffer.concat([rxBuffer, chunk]);
-      rxBuffer = parseStreamFrames(rxBuffer, (messageBuffer) => {
-        try {
-          const packet = JSON.parse(messageBuffer.toString());
-          const response = {
-            requestId: packet.requestId,
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ server: 'TLS Target Server', received: packet.payload })
-          };
-          socket.write(frameStreamMessage(Buffer.from(JSON.stringify(response))));
-        } catch (err) {
-          console.error('[TLS Target Error]', err);
-        }
-      });
+  if (typeof hostOrCerts === 'string') {
+    host = hostOrCerts;
+  } else if (typeof hostOrCerts === 'object' && hostOrCerts !== null) {
+    if (!hostOrCerts.key) {
+      handler = hostOrCerts;
     }
-  });
+  }
+
+  const server_tls = createTlsServer(
+    {
+      port: portNum,
+      host: host,
+      key: certs.key,
+      cert: certs.cert,
+      rejectUnauthorized: false
+    },
+    handler || (async (requestData, socket, server, packet) => {
+      console.log('[TLS Server] Received incoming request payload:', requestData);
+
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: {
+          success: true,
+          server: 'TLS Target Server',
+          message: 'Hello from TLS Server via createTlsServer!',
+          timestamp: new Date().toISOString(),
+          received: requestData
+        }
+      };
+    })
+  );
+
+  console.log(`[TLS Server] Running securely on tls://${host}:${portNum}`);
+  return server_tls;
 }
 
 if (require.main === module) {
-  try {
-    createTargetTlsServer(7001);
-  } catch (e) {
-    console.error('Please generate key.pem and cert.pem first.', e);
-  }
+  startTlsServer();
 }
 
-module.exports = { createTargetTlsServer };
+module.exports = {
+  startTlsServer
+};

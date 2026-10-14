@@ -4,7 +4,7 @@ const { proxyToProtocol } = require('../demo_http/proxy_tls');
 const { generateSelfSignedCert } = require('../index');
 const { frameMessage, parseFrames } = require('../index');
 
-const TARGET_PORT = 9003;
+const TARGET_PORT = 8004;
 
 describe('TLS Proxy Module (proxy_tls.js)', function () {
   this.timeout(5000);

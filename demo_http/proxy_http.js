@@ -2,8 +2,8 @@ const http = require('http');
 const { createHttpServer } = require('../index');
 const { getOrGenerateSelfSignedCert } = require('../index');
 
-const PROXY_PORT = 8007;
-const TARGET_PORT = 9007;
+const PROXY_PORT = 41210;
+const TARGET_PORT = 8001;
 
 function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
   return new Promise((resolve, reject) => {

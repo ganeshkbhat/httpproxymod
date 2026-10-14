@@ -1,66 +1,55 @@
-const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
+const {
+  getCerts,
+  createUdpProxyServer
+} = require('../index.js');
 
-/**
- * UDP to TLS Proxy Server Demo using udpProxyToProtocol
- */
-function createUdpToTlsProxy(options = {}, customLifecycle = {}) {
-  const targetHost = options.targetHost || options.protocolHost || '127.0.0.1';
-  const targetPort = options.targetPort || options.protocolPort || 7001;
+function startUdpProxyServer(udpPortOrOptions = 41210, tlsPortOrHandlers = 8004, tlsHost = '127.0.0.1') {
+  const certs = getCerts();
+  let udpPort = 41210;
+  let tlsPort = 8004;
+  let host = tlsHost;
+  let handlers = null;
+  let extraOptions = {};
 
-  const serverOptions = {
-    udpHost: options.udpHost || options.host || '127.0.0.1',
-    udpPort: options.udpPort || options.port || 41210,
-    protocol: 'tls',
-    protocolHost: targetHost,
-    protocolPort: targetPort,
-    key: options.key,
-    cert: options.cert,
-    ca: options.ca,
-    rejectUnauthorized: options.rejectUnauthorized !== false,
-    ...options
-  };
+  if (typeof udpPortOrOptions === 'object' && udpPortOrOptions !== null) {
+    udpPort = udpPortOrOptions.udpPort || udpPortOrOptions.port || 41210;
+    tlsPort = udpPortOrOptions.protocolPort || udpPortOrOptions.targetPort || 8004;
+    host = udpPortOrOptions.protocolHost || udpPortOrOptions.host || '127.0.0.1';
+    extraOptions = udpPortOrOptions;
+    handlers = tlsPortOrHandlers;
+  } else {
+    udpPort = udpPortOrOptions;
+    tlsPort = tlsPortOrHandlers;
+  }
 
-  const proxyHandler = async (udpMessageDetails, rinfo, server) => {
-    if (typeof customLifecycle.onMessageReceived === 'function') {
-      await customLifecycle.onMessageReceived(udpMessageDetails, rinfo, server);
-    }
-
-    let messageDetails = udpMessageDetails;
-    if (typeof customLifecycle.onRequestModified === 'function') {
-      messageDetails = await customLifecycle.onRequestModified(messageDetails, rinfo);
-    }
-
-    const result = await udpProxyToProtocol(messageDetails, serverOptions);
-
-    let response = result.response;
-    if (typeof customLifecycle.onResponseReceived === 'function') {
-      response = await customLifecycle.onResponseReceived(response, messageDetails);
-    }
-
-    return {
-      status: response.status,
-      headers: response.headers,
-      body: response.body
-    };
-  };
-
-  const lifecycleOptions = {
-    onConnect: (server) => {
-      console.log(`[UDP->TLS Proxy] Listening on ${serverOptions.udpHost}:${serverOptions.udpPort} proxying to TLS ${targetHost}:${targetPort}`);
-      if (typeof customLifecycle.onConnect === 'function') customLifecycle.onConnect(server);
+  const udpProxyServer = createUdpProxyServer(
+    {
+      udpPort: udpPort,
+      udpHost: '127.0.0.1',
+      protocol: 'tls',
+      protocolHost: host,
+      protocolPort: tlsPort,
+      rejectUnauthorized: false,
+      key: certs.key,
+      cert: certs.cert,
+      autoClose: true,
+      ...extraOptions
     },
-    onClose: (server) => {
-      console.log(`[UDP->TLS Proxy] Server closed`);
-      if (typeof customLifecycle.onClose === 'function') customLifecycle.onClose(server);
-    }
-  };
+    handlers
+  );
 
-  return createUdpProxyServer({ ...serverOptions, ...lifecycleOptions }, proxyHandler);
+  console.log(`[UDP Proxy Server] Listening on udp://127.0.0.1:${udpPort} forwarding to tls://${host}:${tlsPort}`);
+  return udpProxyServer;
 }
 
 if (require.main === module) {
-  const proxy = createUdpToTlsProxy();
-  console.log('UDP to TLS proxy running. Press Ctrl+C to stop.');
+  const TLS_PORT = process.env.TLS_PORT ? parseInt(process.env.TLS_PORT, 10) : 8004;
+  const UDP_PORT = process.env.UDP_PORT ? parseInt(process.env.UDP_PORT, 10) : 41210;
+  const TLS_HOST = process.env.TLS_HOST || '127.0.0.1';
+
+  startUdpProxyServer(UDP_PORT, TLS_PORT, TLS_HOST);
 }
 
-module.exports = { createUdpToTlsProxy };
+module.exports = {
+  startUdpProxyServer
+};

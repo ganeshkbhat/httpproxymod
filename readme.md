@@ -1,4 +1,8 @@
-http proxy to http, https, udp, tls, socket, ws, wss
+The package supports :
+
+- http proxy to http, https, udp, tls, socket, ws, wss
+- udp proxy to http, https, udp, tls, socket, ws, wss
+
 
 all exports from the package to manage and handle proxies
 
