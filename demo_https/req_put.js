@@ -1,7 +1,7 @@
 const { sendHttpRequest } = require('../index');
 
 async function sendPutRequest() {
-  const targetUrl = 'https://127.0.0.1:41210/put-resource';
+  const targetUrl = 'https://127.0.0.1:41211/put-resource';
   console.log(`[PUT Request] Sending PUT request to ${targetUrl}...`);
 
   const payload = {

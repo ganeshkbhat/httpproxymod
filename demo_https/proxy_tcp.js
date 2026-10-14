@@ -3,6 +3,10 @@ const { clients: { tcp: createTcpClient }, createHttpServer, getOrGenerateSelfSi
 const PROXY_PORT = 41211;
 const TARGET_PORT = 9001;
 
+/**
+ * Proxies incoming HTTP requests to a target protocol (TCP) with comprehensive 
+ * inline console logging across all lifecycle events and custom handler integrations.
+ */
 function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
   return new Promise((resolve, reject) => {
     const onConnection = customHandlers.onConnection || customHandlers.onConnect;
@@ -18,13 +22,18 @@ function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
     const host = customHandlers.host || customHandlers.protocolHost || '127.0.0.1';
     const port = customHandlers.port || customHandlers.protocolPort || TARGET_PORT;
 
+    console.log(`[PROXY EVENT] Initializing connection to target protocol server at ${host}:${port} for method: ${httpRequestDetails.method}, url: ${httpRequestDetails.url}`);
+
     const tcpClient = createTcpClient({ host, port }, (responsePacket, socket) => {
+      console.log('[PROXY EVENT] onData / onMessage: Received data packet from target server:', responsePacket);
       let res = responsePacket;
       if (typeof onMessage === 'function') {
+        console.log('[PROXY EVENT] Executing custom onMessage handler callback');
         const temp = onMessage(res, socket);
         if (temp !== undefined) res = temp;
       }
       if (typeof onData === 'function') {
+        console.log('[PROXY EVENT] Executing custom onData handler callback');
         const temp = onData(res, socket);
         if (temp !== undefined) res = temp;
       }
@@ -32,28 +41,54 @@ function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
     });
 
     if (typeof onConnection === 'function') {
+      console.log('[PROXY EVENT] onConnection: Invoking custom connection handler');
       onConnection(tcpClient.socket || tcpClient);
     } else if (typeof onConnect === 'function') {
+      console.log('[PROXY EVENT] onConnect: Invoking custom connect handler');
       onConnect(tcpClient.socket || tcpClient);
     }
 
     if (tcpClient.socket) {
+      tcpClient.socket.on('connect', () => {
+        console.log('[PROXY SOCKET EVENT] connect: Socket connection successfully established.');
+      });
+
       tcpClient.socket.on('end', () => {
-        if (typeof onEnd === 'function') onEnd(tcpClient.socket);
+        console.log('[PROXY SOCKET EVENT] onEnd: FIN received from target protocol server.');
+        if (typeof onEnd === 'function') {
+          console.log('[PROXY EVENT] Executing custom onEnd handler');
+          onEnd(tcpClient.socket);
+        }
       });
+
       tcpClient.socket.on('error', (err) => {
-        if (typeof onError === 'function') onError(err, tcpClient.socket);
+        console.error('[PROXY SOCKET EVENT] onError: Socket error encountered:', err.message);
+        if (typeof onError === 'function') {
+          console.log('[PROXY EVENT] Executing custom onError handler');
+          onError(err, tcpClient.socket);
+        }
       });
+
       tcpClient.socket.on('close', (hadError) => {
-        if (typeof onClose === 'function') onClose(hadError, tcpClient.socket);
-        if (typeof onDestroy === 'function') onDestroy(hadError, tcpClient.socket);
+        console.log(`[PROXY SOCKET EVENT] onClose: Socket closed (hadError: ${hadError})`);
+        if (typeof onClose === 'function') {
+          console.log('[PROXY EVENT] Executing custom onClose handler');
+          onClose(hadError, tcpClient.socket);
+        }
+        if (typeof onDestroy === 'function') {
+          console.log('[PROXY EVENT] onDestroy: Cleaning up socket resources');
+          onDestroy(hadError, tcpClient.socket);
+        }
       });
     }
 
+    console.log('[PROXY EVENT] onProcessing: Sending protocol request payload through TCP client');
     tcpClient.sendProtocolRequestPayload(httpRequestDetails)
       .then((response) => {
+        console.log('[PROXY EVENT] onResponse: Successfully received response payload from protocol client');
         let finalRes = response;
         if (typeof onResponse === 'function') {
+          console.log('[PROXY EVENT] Executing custom onResponse handler');
           const temp = onResponse(finalRes, httpRequestDetails);
           if (temp !== undefined) finalRes = temp;
         }
@@ -82,6 +117,7 @@ function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
         resolve(formattedResult);
       })
       .catch((err) => {
+        console.error('[PROXY ERROR] Request payload dispatch failed:', err.message);
         if (typeof onError === 'function') {
           onError(err, tcpClient.socket || tcpClient);
         }
@@ -92,6 +128,7 @@ function proxyToProtocol(httpRequestDetails, customHandlers = {}) {
 }
 
 const requestHandler = (req, res, httpRequestDetails) => {
+  console.log(`[HTTP SERVER EVENT] Incoming HTTP request received: ${req.method} ${req.url}`);
   const reqDetails = httpRequestDetails || { method: req.method, url: req.url, headers: req.headers, body: '' };
   
   (async () => {
@@ -105,7 +142,9 @@ const requestHandler = (req, res, httpRequestDetails) => {
 
       res.writeHead(status, headers);
       res.end(responseBody);
+      console.log(`[HTTP SERVER EVENT] Response successfully sent to client with status ${status}`);
     } catch (err) {
+      console.error('[HTTP SERVER ERROR] Request handler exception:', err.message);
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }
@@ -122,15 +161,26 @@ function startProxyServer() {
   }, requestHandler);
 
   proxyServer.on('error', (err) => {
-    console.error(`[TCP Proxy] HTTPS server error: ${err.message}`);
+    console.error(`[PROXY SERVER ERROR] HTTPS server error: ${err.message}`);
   });
+
+  console.log(`[PROXY SERVER] HTTPS Proxy Server successfully listening on port ${PROXY_PORT}`);
 
   return {
     server: proxyServer,
     close: (callback) => {
+      console.log('[PROXY SERVER] Closing HTTPS proxy server...');
       proxyServer.close(callback);
     }
   };
+}
+
+if (require.main === module) {
+  try {
+    startProxyServer();
+  } catch (err) {
+    console.error('[TCP Proxy Startup Error]:', err);
+  }
 }
 
 module.exports = { proxyToProtocol, startProxyServer };

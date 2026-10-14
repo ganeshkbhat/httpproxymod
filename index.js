@@ -18,6 +18,11 @@ const DEFAULT_SOCKET_PATH = process.platform === 'win32'
 // CERTIFICATE HELPER FUNCTIONS
 // ============================================================================
 
+/**
+ * Encodes an ASN.1 length field in DER format.
+ * @param {number} len - The length value to encode.
+ * @returns {Buffer} DER encoded length buffer.
+ */
 function encodeLength(len) {
   if (len < 128) return Buffer.from([len]);
   const bytes = [];
@@ -29,19 +34,40 @@ function encodeLength(len) {
   return Buffer.from([0x80 | bytes.length, ...bytes]);
 }
 
+/**
+ * Wraps a payload buffer in an ASN.1 TLV (Tag-Length-Value) structure.
+ * @param {number} tag - ASN.1 tag byte.
+ * @param {Buffer} value - Value buffer.
+ * @returns {Buffer} Combined TLV buffer.
+ */
 function asn1(tag, value) {
   const len = encodeLength(value.length);
   return Buffer.concat([Buffer.from([tag]), len, value]);
 }
 
+/**
+ * Creates an ASN.1 SEQUENCE (Tag 0x30).
+ * @param {...Buffer} items - Child buffers.
+ * @returns {Buffer} SEQUENCE buffer.
+ */
 function asn1Seq(...items) {
   return asn1(0x30, Buffer.concat(items));
 }
 
+/**
+ * Creates an ASN.1 SET (Tag 0x31).
+ * @param {...Buffer} items - Child buffers.
+ * @returns {Buffer} SET buffer.
+ */
 function asn1Set(...items) {
   return asn1(0x31, Buffer.concat(items));
 }
 
+/**
+ * Encodes an integer into an ASN.1 INTEGER structure (Tag 0x02).
+ * @param {Buffer} numBuf - Big-endian number buffer.
+ * @returns {Buffer} ASN.1 INTEGER buffer.
+ */
 function asn1Integer(numBuf) {
   if (numBuf[0] & 0x80) {
     numBuf = Buffer.concat([Buffer.from([0x00]), numBuf]);
@@ -49,6 +75,11 @@ function asn1Integer(numBuf) {
   return asn1(0x02, numBuf);
 }
 
+/**
+ * Encodes an Object Identifier (OID) string into an ASN.1 OID structure (Tag 0x06).
+ * @param {string} oidStr - Dot-separated OID string (e.g. '1.2.840...').
+ * @returns {Buffer} ASN.1 OID buffer.
+ */
 function asn1Oid(oidStr) {
   const parts = oidStr.split('.').map(Number);
   const bytes = [parts[0] * 40 + parts[1]];
@@ -66,6 +97,11 @@ function asn1Oid(oidStr) {
   return asn1(0x06, Buffer.from(bytes));
 }
 
+/**
+ * Formats a Date object into an ASN.1 UTCTime string (Tag 0x17).
+ * @param {Date} date - Date instance.
+ * @returns {Buffer} ASN.1 UTCTime buffer.
+ */
 function asn1UtcTime(date) {
   const pad = (n) => (n < 10 ? '0' + n : '' + n);
   const str =
@@ -79,6 +115,10 @@ function asn1UtcTime(date) {
   return asn1(0x17, Buffer.from(str, 'ascii'));
 }
 
+/**
+ * Programmatically generates a self-signed RSA X.509 certificate and private key.
+ * @returns {{key: string, cert: string}} Generated PEM-encoded private key and certificate.
+ */
 function generateSelfSignedCert() {
   const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,
@@ -127,6 +167,10 @@ function generateSelfSignedCert() {
   };
 }
 
+/**
+ * Retrieves certificates from command-line arguments or falls back to generating a self-signed certificate.
+ * @returns {{key: string, cert: string}} Private key and certificate pair.
+ */
 function getOrGenerateSelfSignedCert() {
   const args = process.argv.slice(2);
   let keyPath = null;
@@ -158,6 +202,10 @@ function getOrGenerateSelfSignedCert() {
   return generateSelfSignedCert();
 }
 
+/**
+ * Generates self-signed certificates and saves them to disk as key.pem and cert.pem.
+ * @returns {{key: string, cert: string}} Saved key and cert content.
+ */
 function generateAndSaveCerts() {
   const { key, cert } = generateSelfSignedCert();
 
@@ -174,6 +222,10 @@ function generateAndSaveCerts() {
   return { key, cert };
 }
 
+/**
+ * Loads existing certificates from disk or generates and saves new ones if missing.
+ * @returns {{key: string, cert: string}} Key and certificate pair.
+ */
 function getCerts() {
   const keyPath = path.join(__dirname, 'key.pem');
   const certPath = path.join(__dirname, 'cert.pem');
@@ -194,6 +246,9 @@ function getCerts() {
 
 let activeProtocolClient = null;
 
+/**
+ * Default proxy handler returning a static pong response or delegating to custom request handlers.
+ */
 const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
   if (typeof options.requestHandler === 'function') {
     return await options.requestHandler(req, res, httpRequestDetails, options);
@@ -202,6 +257,9 @@ const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) =
   return { status: 200, headers: { 'content-type': 'text/plain' }, body: 'pong' };
 };
 
+/**
+ * Standard HTTP proxy handler forwarding requests using `sendHttpRequest`.
+ */
 const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
   if (typeof options.requestHandler === 'function') {
     const handlerResult = await options.requestHandler(req, res, httpRequestDetails, options);
@@ -263,12 +321,23 @@ const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
 // HELPER & UTILITY FUNCTIONS (Framing & Parsing)
 // ============================================================================
 
+/**
+ * Frames a buffer by prepending a 4-byte big-endian length header.
+ * @param {Buffer} buffer - Raw payload buffer.
+ * @returns {Buffer} Framed message buffer.
+ */
 function frameStreamMessage(buffer) {
   const lengthBuffer = Buffer.alloc(4);
   lengthBuffer.writeUInt32BE(buffer.length, 0);
   return Buffer.concat([lengthBuffer, buffer]);
 }
 
+/**
+ * Parses framed stream messages from a buffer store and invokes callback on each complete message.
+ * @param {Buffer} bufferStore - Accumulated input buffer.
+ * @param {Function} onMessage - Callback receiving parsed message buffers.
+ * @returns {Buffer} Remaining unparsed buffer.
+ */
 function parseStreamFrames(bufferStore, onMessage) {
   while (bufferStore.length >= 4) {
     const messageLength = bufferStore.readUInt32BE(0);
@@ -288,6 +357,14 @@ function parseStreamFrames(bufferStore, onMessage) {
 const frameMessage = frameStreamMessage;
 const parseFrames = parseStreamFrames;
 
+/**
+ * Constructs a WebSocket frame from a payload buffer.
+ * @param {Buffer} payloadBuffer - Message payload.
+ * @param {boolean} [isFinal=true] - Whether this is the final frame.
+ * @param {number} [opcode=0x01] - Frame opcode.
+ * @param {boolean} [isMasked=false] - Whether to mask payload.
+ * @returns {Buffer} Formatted WebSocket frame buffer.
+ */
 function buildWsFrame(payloadBuffer, isFinal = true, opcode = 0x01, isMasked = false) {
   const payloadLength = payloadBuffer.length;
   let headerLength = 2;
@@ -334,6 +411,12 @@ function buildWsFrame(payloadBuffer, isFinal = true, opcode = 0x01, isMasked = f
   return frame;
 }
 
+/**
+ * Parses incoming WebSocket frames from a buffer.
+ * @param {Buffer} buffer - Input buffer stream.
+ * @param {Function} onFrame - Callback for each parsed frame.
+ * @returns {Buffer} Remaining unparsed buffer.
+ */
 function parseWsFrames(buffer, onFrame) {
   let offset = 0;
 
@@ -388,6 +471,12 @@ function parseWsFrames(buffer, onFrame) {
 // HANDLER RESOLUTION HELPER
 // ============================================================================
 
+/**
+ * Standardizes and resolves lifecycle handler options across servers and clients.
+ * @param {Object} [options={}] - Configuration options object.
+ * @param {Function|Object} [handlerArg] - Handler function or mapping object.
+ * @returns {Object} Normalized handlers mapping.
+ */
 function resolveHandlers(options = {}, handlerArg) {
   const handlers = typeof handlerArg === 'function' ? { onData: handlerArg } : (handlerArg || {});
   return {
@@ -409,6 +498,12 @@ function resolveHandlers(options = {}, handlerArg) {
 // SERVER CREATORS FOR OTHER PROTOCOLS
 // ============================================================================
 
+/**
+ * Creates and starts a UDP server instance.
+ * @param {Object} [options={}] - Server options (host, port, socketType).
+ * @param {Function|Object} [handlerArg] - Message/event handlers.
+ * @returns {{server: dgram.Socket, close: Function}} UDP server wrapper object.
+ */
 function createUdpServer(options = {}, handlerArg) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 41234;
@@ -474,6 +569,14 @@ function createUdpServer(options = {}, handlerArg) {
   };
 }
 
+/**
+ * Sets up stream parsing and event handling for a raw socket connection (TCP/TLS/Unix Socket).
+ * @param {net.Socket|tls.TLSSocket} socket - Connected socket instance.
+ * @param {net.Server} server - Parent server instance.
+ * @param {Object} handlers - Lifecycle handlers.
+ * @param {Function} onError - Error handler.
+ * @param {Function} onDestroy - Destroy/cleanup handler.
+ */
 function setupStreamServerConnection(socket, server, handlers, onError, onDestroy) {
   const onConnect = handlers.onConnect || handlers.onConnection;
   const onData = handlers.onData || handlers.onMessage;
@@ -540,6 +643,12 @@ function setupStreamServerConnection(socket, server, handlers, onError, onDestro
   });
 }
 
+/**
+ * Creates and starts a TCP server instance.
+ * @param {Object} [options={}] - Server options (host, port).
+ * @param {Function|Object} [handlerArg] - Request/data handlers.
+ * @returns {{server: net.Server, close: Function}} TCP server wrapper object.
+ */
 function createTcpServer(options = {}, handlerArg) {
   const port = options.port || 7000;
   const host = options.host || '127.0.0.1';
@@ -577,6 +686,12 @@ function createTcpServer(options = {}, handlerArg) {
   };
 }
 
+/**
+ * Creates and starts a TLS server instance.
+ * @param {Object} [options={}] - Server options (key, cert, port, host).
+ * @param {Function|Object} [handlerArg] - Request/data handlers.
+ * @returns {{server: tls.Server, close: Function}} TLS server wrapper object.
+ */
 function createTlsServer(options = {}, handlerArg) {
   const port = options.port || 7001;
   const host = options.host || '127.0.0.1';
@@ -621,6 +736,9 @@ function createTlsServer(options = {}, handlerArg) {
   };
 }
 
+/**
+ * Handles WebSocket upgrade handshakes and frame parsing loops.
+ */
 function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
   const handlers = resolveHandlers(options, handlerArg);
   const onConnect = handlers.onConnect || handlers.onConnection;
@@ -722,6 +840,12 @@ function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
   });
 }
 
+/**
+ * Creates and starts a WebSocket server instance.
+ * @param {Object} [options={}] - Server options.
+ * @param {Function|Object} [handlerArg] - Handlers.
+ * @returns {{server: http.Server, close: Function}} WS server wrapper.
+ */
 function createWsServer(options = {}, handlerArg) {
   const port = options.port || 8081;
   const host = options.host || '127.0.0.1';
@@ -765,6 +889,12 @@ function createWsServer(options = {}, handlerArg) {
   };
 }
 
+/**
+ * Creates and starts a Secure WebSocket (WSS) server instance.
+ * @param {Object} [options={}] - Server options.
+ * @param {Function|Object} [handlerArg] - Handlers.
+ * @returns {{server: https.Server, close: Function}} WSS server wrapper.
+ */
 function createWssServer(options = {}, handlerArg) {
   const port = options.port || 8443;
   const host = options.host || '127.0.0.1';
@@ -866,6 +996,12 @@ function createWssServer(options = {}, handlerArg) {
   };
 }
 
+/**
+ * Creates and starts a Unix Domain Socket or Windows Named Pipe server instance.
+ * @param {Object|string} [options={}] - Socket path or options object.
+ * @param {Function|Object} [handlerArg] - Handlers.
+ * @returns {{server: net.Server, close: Function}} Socket server wrapper.
+ */
 function createSocketServer(options = {}, handlerArg) {
   const socketPath = typeof options === 'string'
     ? options
@@ -921,6 +1057,9 @@ function createSocketServer(options = {}, handlerArg) {
 // CLIENT CREATORS FOR ALL PROTOCOLS
 // ============================================================================
 
+/**
+ * Creates a UDP client capable of sending framed protocol request payloads.
+ */
 function createUdpClient(options = {}, genericClientHandler) {
   const targetHost = options.host || '127.0.0.1';
   const targetPort = options.port || 41234;
@@ -984,6 +1123,9 @@ function createUdpClient(options = {}, genericClientHandler) {
   };
 }
 
+/**
+ * Base creator for streaming socket clients (TCP, TLS, Unix Sockets).
+ */
 function createBaseStreamClient(connectFn, genericClientHandler) {
   let socket = null;
   const pendingRequests = new Map();
@@ -1078,12 +1220,18 @@ function createBaseStreamClient(connectFn, genericClientHandler) {
   };
 }
 
+/**
+ * Creates a TCP client connection.
+ */
 function createTcpClient(options = {}, genericClientHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 7000;
   return createBaseStreamClient(() => net.createConnection({ host, port }), genericClientHandler);
 }
 
+/**
+ * Creates a TLS client connection.
+ */
 function createTlsClient(options = {}, genericClientHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 7001;
@@ -1093,6 +1241,9 @@ function createTlsClient(options = {}, genericClientHandler) {
   }), genericClientHandler);
 }
 
+/**
+ * Creates a Unix Domain Socket or Named Pipe client connection.
+ */
 function createSocketClient(options = {}, genericClientHandler) {
   const socketPath = typeof options === 'string'
     ? options
@@ -1104,6 +1255,9 @@ function createSocketClient(options = {}, genericClientHandler) {
   );
 }
 
+/**
+ * Creates an HTTP/HTTPS client wrapper.
+ */
 function createHttpClient(options = {}, genericClientHandler) {
   return {
     sendProtocolRequestPayload: async function (httpRequestDetails) {
@@ -1139,6 +1293,9 @@ function createHttpClient(options = {}, genericClientHandler) {
   };
 }
 
+/**
+ * Generic base client for WebSocket (WS/WSS).
+ */
 function createGenericWsClient(isSecure, options = {}, genericClientHandler) {
   const pendingRequests = new Map();
   let requestIdCounter = 0;
@@ -1231,10 +1388,16 @@ function createGenericWsClient(isSecure, options = {}, genericClientHandler) {
   };
 }
 
+/**
+ * Creates a WebSocket (WS) client connection.
+ */
 function createWsClient(options, genericClientHandler) {
   return createGenericWsClient(false, options, genericClientHandler);
 }
 
+/**
+ * Creates a Secure WebSocket (WSS) client connection.
+ */
 function createWssClient(options, genericClientHandler) {
   return createGenericWsClient(true, options, genericClientHandler);
 }
@@ -1243,6 +1406,9 @@ function createWssClient(options, genericClientHandler) {
 // REVERSE PROXY ROUTER & STANDALONE PROXY TO PROTOCOL
 // ============================================================================
 
+/**
+ * Forwards HTTP requests to arbitrary backend protocol clients.
+ */
 async function httpProxyToProtocol(httpRequestDetails, options = {}) {
   let protocolClient;
   let createdInternally = false;
@@ -1329,6 +1495,9 @@ async function httpProxyToProtocol(httpRequestDetails, options = {}) {
   }
 }
 
+/**
+ * Forwards UDP messages to arbitrary backend protocol clients.
+ */
 async function udpProxyToProtocol(udpMessageDetails, options = {}) {
   let protocolClient;
   let createdInternally = false;
@@ -1427,6 +1596,9 @@ async function udpProxyToProtocol(udpMessageDetails, options = {}) {
 // HTTP / HTTPS SERVER ENGINE
 // ============================================================================
 
+/**
+ * Creates an HTTP request handler middleware with authentication and lifecycle event support.
+ */
 function createRequestHandler(options = {}, setProtocolClient = (client) => {
     activeProtocolClient = client;
   }, handlerArg) {
@@ -1590,6 +1762,12 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
   };
 }
 
+/**
+ * Creates and starts an HTTP or HTTPS server instance.
+ * @param {Object} [options={}] - Server options.
+ * @param {Function} [requestHandlerArg] - Custom request handler.
+ * @returns {{server: http.Server|https.Server, close: Function, getProtocolClient: Function}} Server wrapper object.
+ */
 function createHttpServer(options = {}, requestHandlerArg) {
   const port = options.httpPort || options.port || 8080;
   const isHttps = Boolean(options.useHttps || (options.key && options.cert));
@@ -1639,6 +1817,9 @@ function createHttpServer(options = {}, requestHandlerArg) {
   };
 }
 
+/**
+ * Creates and starts an HTTPS server instance.
+ */
 function createHttpsServer(options = {}, requestHandlerArg) {
   return createHttpServer({ ...options, useHttps: true }, requestHandlerArg);
 }
@@ -1647,6 +1828,9 @@ function createHttpsServer(options = {}, requestHandlerArg) {
 // UDP PROXY SERVER ENGINE
 // ============================================================================
 
+/**
+ * Creates a UDP proxy server instance forwarding messages to backend protocols.
+ */
 function createUdpProxyServer(options = {}, proxyHandler) {
   const host = options.udpHost || options.host || '127.0.0.1';
   const port = options.udpPort || options.port || 41234;

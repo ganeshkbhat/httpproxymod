@@ -1,7 +1,7 @@
 const { sendHttpRequest } = require('../index');
 
 async function sendDeleteRequest() {
-  const targetUrl = 'https://127.0.0.1:41210/delete-resource';
+  const targetUrl = 'https://127.0.0.1:41211/delete-resource';
   console.log(`[DELETE Request] Sending DELETE request to ${targetUrl}...`);
 
   try {

@@ -1,7 +1,7 @@
 const { sendHttpRequest } = require('../index');
 
 async function sendPostRequest() {
-  const targetUrl = 'https://127.0.0.1:41210/post-resource';
+  const targetUrl = 'https://127.0.0.1:41211/post-resource';
   console.log(`[POST Request] Sending POST request to ${targetUrl}...`);
 
   const payload = {

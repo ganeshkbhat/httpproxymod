@@ -1,7 +1,7 @@
 const { sendHttpRequest } = require('../index');
 
 async function sendGetRequest() {
-  const targetUrl = 'https://127.0.0.1:41210/get-resource';
+  const targetUrl = 'https://127.0.0.1:41211/get-resource';
   console.log(`[GET Request] Sending GET request to ${targetUrl}...`);
 
   try {

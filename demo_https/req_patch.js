@@ -1,7 +1,7 @@
 const { sendHttpRequest } = require('../index');
 
 async function sendPatchRequest() {
-  const targetUrl = 'https://127.0.0.1:41210/patch-resource';
+  const targetUrl = 'https://127.0.0.1:41211/patch-resource';
   console.log(`[PATCH Request] Sending PATCH request to ${targetUrl}...`);
 
   const payload = {
