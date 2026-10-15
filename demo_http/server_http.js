@@ -1,4 +1,4 @@
-const { createHttpServer: createServer } = require('../index');
+const { servers: { http: createServer } } = require('../index');
 
 function createHttpServer(port = 8001, onData) {
   const defaultOnData = (data) => ({

@@ -1,6 +1,6 @@
 const https = require('https');
 const crypto = require('crypto');
-const { generateSelfSignedCert } = require('../index');
+const { certs: { generateSelfSignedCert } } = require('../index');
 
 const WS_GUID = '23582111-PRTE-4B0E-9A0B-8C5E8C925682';
 

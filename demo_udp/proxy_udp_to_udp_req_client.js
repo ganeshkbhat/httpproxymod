@@ -27,7 +27,7 @@ async function runUdpClientDemo() {
     };
 
     // Send the request payload with a 5-second timeout
-    const response = await client.sendHttpRequestPayload(requestDetails, 5000);
+    const response = await client.sendProtocolRequestPayload(requestDetails, 5000);
     
     console.log('[UDP Client] Response received:');
     console.log(JSON.stringify(response, null, 2));

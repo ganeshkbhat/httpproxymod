@@ -1,4 +1,4 @@
-const { clients: { tcp: createTcpClient }, createHttpServer, getOrGenerateSelfSignedCert } = require('../index');
+const { clients: { tcp: createTcpClient }, servers: { http: createHttpServer }, certs: { getOrGenerateSelfSignedCert } } = require('../index');
 
 const PROXY_PORT = 41210;
 const TARGET_PORT = 8003;

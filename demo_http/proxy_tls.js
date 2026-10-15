@@ -1,5 +1,5 @@
 const tls = require('tls');
-const { createHttpServer, getOrGenerateSelfSignedCert, frameMessage, parseFrames } = require('../index');
+const { servers: { https: createHttpServer }, certs: { getOrGenerateSelfSignedCert }, framing: { frameMessage, parseFrames } } = require('../index');
 
 const PROXY_PORT = 41210;
 const TARGET_PORT = 8004;

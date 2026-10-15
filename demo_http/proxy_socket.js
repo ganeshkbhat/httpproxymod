@@ -1,7 +1,7 @@
 const net = require('net');
-const { createHttpServer } = require('../index');
-const { getOrGenerateSelfSignedCert } = require('../index');
-const { frameMessage, parseFrames } = require('../index');
+const { servers: { http: createHttpServer } } = require('../index');
+const { certs: { getOrGenerateSelfSignedCert } } = require('../index');
+const { framing: { frameMessage, parseFrames } } = require('../index');
 
 const PROXY_PORT = 41210;
 const SOCKET_PATH = process.platform === 'win32'

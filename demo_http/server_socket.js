@@ -1,6 +1,6 @@
 const net = require('net');
 const fs = require('fs');
-const { frameMessage, parseFrames } = require('../index');
+const { framing: { frameMessage, parseFrames } } = require('../index');
 
 const DEFAULT_SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\demo_socket'

@@ -1,7 +1,7 @@
 const https = require('https');
 const crypto = require('crypto');
-const { createHttpServer, clients } = require('../index');
-const { getOrGenerateSelfSignedCert } = require('../index');
+const { servers: { https: createHttpServer }, clients } = require('../index');
+const { certs: { getOrGenerateSelfSignedCert } } = require('../index');
 
 const PROXY_PORT = 41210;
 const TARGET_PORT = 8007;

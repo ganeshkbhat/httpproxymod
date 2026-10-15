@@ -1,5 +1,5 @@
-const { createHttpServer: createServer } = require('../index');
-const { generateSelfSignedCert } = require('../index');
+const { servers: { https: createServer } } = require('../index');
+const { certs: { generateSelfSignedCert } } = require('../index');
 
 function createHttpsServer(port = 8002, onData) {
   const defaultOnData = (data) => ({

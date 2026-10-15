@@ -1,8 +1,8 @@
 const tls = require('tls');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_tls');
-const { generateSelfSignedCert } = require('../index');
-const { frameMessage, parseFrames } = require('../index');
+const { certs: { generateSelfSignedCert } } = require('../index');
+const { framing: { frameMessage, parseFrames } } = require('../index');
 
 const TARGET_PORT = 8004;
 

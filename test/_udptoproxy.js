@@ -1,4 +1,5 @@
-const { servers, clients, getCerts, createUdpProxyServer, DEFAULT_SOCKET_PATH } = require('../index.js');
+const { servers, clients, certs : { getCerts }, DEFAULT_SOCKET_PATH } = require('../index.js');
+const { servers : { udpProxy: createUdpProxyServer } } = require('../index.js');
 const { expect } = require('chai');
 const http = require('http');
 const https = require('https');

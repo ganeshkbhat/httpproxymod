@@ -1,5 +1,5 @@
 const {
-  getCerts,
+  certs: { getCerts },
   servers: { tls: createTlsServer }
 } = require('../index.js');
 

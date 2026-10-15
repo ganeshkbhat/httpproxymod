@@ -2,7 +2,7 @@ const net = require('net');
 const fs = require('fs');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_socket');
-const { frameMessage, parseFrames } = require('../index');
+const { framing: { frameMessage, parseFrames } } = require('../index');
 
 const SOCKET_PATH = process.platform === 'win32'
   ? '\\\\.\\pipe\\demo_socket'

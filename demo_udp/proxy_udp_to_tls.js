@@ -1,5 +1,5 @@
 const {
-  getCerts,
+  certs: {getCerts},
   createUdpProxyServer
 } = require('../index.js');
 

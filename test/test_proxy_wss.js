@@ -2,7 +2,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_wss');
-const { generateSelfSignedCert } = require('../index');
+const { certs: { generateSelfSignedCert } } = require('../index');
 
 const TARGET_PORT = 8007;
 const WS_GUID = '23582111-PRTE-4B0E-9A0B-8C5E8C925682';

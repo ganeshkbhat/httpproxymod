@@ -1,5 +1,5 @@
 const { expect } = require('chai');
-const { getCerts } = require('../index.js');
+const { certs: { getCerts } } = require('../index.js');
 const { startTlsServer } = require('../demo_udp/server_tls.js');
 const { startUdpProxyServer } = require('../demo_udp/proxy_udp_to_tls.js');
 const { runUdpClientDemo } = require('../demo_udp/proxy_udp_to_tls_req_client.js');

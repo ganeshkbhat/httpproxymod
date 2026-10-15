@@ -1,7 +1,7 @@
 const net = require('net');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_tcp');
-const { frameMessage, parseFrames } = require('../index');
+const { framing : { frameMessage, parseFrames } } = require('../index');
 
 const TARGET_PORT = 8003;
 

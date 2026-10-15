@@ -42,7 +42,7 @@ function runUdpClientDemo(proxyPort = 41234, proxyHost = '127.0.0.1', genericCli
 
     console.log('[UDP Client] Dispatching request payload to proxy...');
 
-    udpClient.sendHttpRequestPayload(requestPayload, 5000)
+    udpClient.sendProtocolRequestPayload(requestPayload, 5000)
       .then((response) => {
         console.log('[UDP Client] Response received successfully:');
         console.log(JSON.stringify(response, null, 2));

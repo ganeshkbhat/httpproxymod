@@ -246,98 +246,174 @@ function getCerts() {
 
 let activeProtocolClient = null;
 
+// /**
+//  * Default proxy handler returning a static pong response or delegating to custom request handlers.
+//  */
+// const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
+//   if (typeof options.requestHandler === 'function') {
+//     return await options.requestHandler(req, res, httpRequestDetails, options);
+//   }
+
+//   return { status: 200, headers: { 'content-type': 'text/plain' }, body: 'pong' };
+// };
+
+// ============================================================================
+// GENERIC PROXY TO PROTOCOL
+// ============================================================================
+
 /**
- * Default proxy handler returning a static pong response or delegating to custom request handlers.
+ * Generic proxy function to forward incoming HTTP/S requests to any target protocol client
+ * with comprehensive lifecycle event logging and handler integrations.
+ * @param {Object} httpRequestDetails - Details of the incoming HTTP request.
+ * @param {Object} customHandlers - Custom handlers, configuration options, and lifecycle callbacks.
+ * @param {Function} protocolClientFactory - Factory function to create the protocol client (e.g., createTcpClient, createTlsClient, createUdpClient).
+ * @returns {Promise<Object>} Formatted response object.
  */
-const defaultProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
-  if (typeof options.requestHandler === 'function') {
-    return await options.requestHandler(req, res, httpRequestDetails, options);
-  }
+function proxyToProtocol(httpRequestDetails, customHandlers = {}, protocolClientFactory) {
+  return new Promise((resolve, reject) => {
+    const handlers = resolveLifeCycleHandlers(customHandlers);
+    
+    const onConnection = handlers.onConnection;
+    const onConnect = handlers.onConnect;
+    const onData = handlers.onData;
+    const onMessage = handlers.onMessage;
+    const onResponse = handlers.onResponse;
+    const onEnd = handlers.onEnd;
+    const onError = handlers.onError;
+    const onClose = handlers.onClose;
+    const onDestroy = handlers.onDestroy;
 
-  return { status: 200, headers: { 'content-type': 'text/plain' }, body: 'pong' };
-};
+    const host = customHandlers.host || customHandlers.protocolHost || '127.0.0.1';
+    const port = customHandlers.port || customHandlers.protocolPort || 9001;
 
-/**
- * Standard HTTP proxy handler forwarding requests using `sendHttpRequest`.
- */
-const httpProxyHandler = async (req, res, httpRequestDetails, options = {}) => {
-  if (typeof options.requestHandler === 'function') {
-    const handlerResult = await options.requestHandler(req, res, httpRequestDetails, options);
-    if (res && (res.writableEnded || res.finished)) {
-      return handlerResult;
-    }
-  }
+    console.log(`[PROXY EVENT] Initializing connection to target protocol server at ${host}:${port} for method: ${httpRequestDetails.method}, url: ${httpRequestDetails.url}`);
 
-  const host = options.protocolHost || options.host || '127.0.0.1';
-  const protocolType = (options.protocol || 'http').toLowerCase();
-  const isHttps = Boolean(options.useHttps || protocolType === 'https');
-  const defaultPort = isHttps ? 443 : 80;
-  const port = options.protocolPort || options.targetPort || options.port || defaultPort;
-  const scheme = isHttps ? 'https' : 'http';
+    const clientOptions = {
+      host: host,
+      port: port,
+      key: customHandlers.key,
+      cert: customHandlers.cert,
+      ca: customHandlers.ca,
+      rejectUnauthorized: customHandlers.rejectUnauthorized !== undefined ? customHandlers.rejectUnauthorized : false
+    };
 
-  const details = httpRequestDetails || (req ? {
-    url: req.url,
-    method: req.method,
-    headers: req.headers,
-    body: ''
-  } : {});
-
-  const targetUrl = `${scheme}://${host}:${port}${details.url || '/'}`;
-
-  try {
-    const proxyRes = await sendHttpRequest({
-      targetUrl: targetUrl,
-      method: details.method || 'GET',
-      headers: details.headers || {},
-      body: details.body || ''
+    const protocolClient = protocolClientFactory(clientOptions, (responsePacket, socket) => {
+      console.log('[PROXY EVENT] onData / onMessage: Received data packet from target server:', responsePacket);
+      let res = responsePacket;
+      if (typeof onMessage === 'function') {
+        console.log('[PROXY EVENT] Executing custom onMessage handler callback');
+        const temp = onMessage(res, socket);
+        if (temp !== undefined) res = temp;
+      }
+      if (typeof onData === 'function') {
+        console.log('[PROXY EVENT] Executing custom onData handler callback');
+        const temp = onData(res, socket);
+        if (temp !== undefined) res = temp;
+      }
+      return res;
     });
 
-    if (res && typeof res.writeHead === 'function' && !res.headersSent) {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      const responseBody = typeof proxyRes.body === 'object' && proxyRes.body !== null && !Buffer.isBuffer(proxyRes.body)
-        ? JSON.stringify(proxyRes.body)
-        : proxyRes.body;
-      res.end(responseBody);
+    if (typeof onConnection === 'function') {
+      console.log('[PROXY EVENT] onConnection: Invoking custom connection handler');
+      onConnection(protocolClient.socket || protocolClient);
+    } else if (typeof onConnect === 'function') {
+      console.log('[PROXY EVENT] onConnect: Invoking custom connect handler');
+      onConnect(protocolClient.socket || protocolClient);
     }
 
-    return {
-      status: proxyRes.statusCode,
-      headers: proxyRes.headers,
-      body: proxyRes.body
-    };
-  } catch (err) {
-    if (res && typeof res.writeHead === 'function' && !res.headersSent) {
-      res.writeHead(504, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        error: 'Gateway Timeout / Proxy Request Failed',
-        details: err.message
-      }));
+    const socketObj = protocolClient.socket || protocolClient;
+    if (socketObj && typeof socketObj.on === 'function') {
+      socketObj.on('connect', () => {
+        console.log('[PROXY SOCKET EVENT] connect: Socket connection successfully established.');
+      });
+      socketObj.on('secureConnect', () => {
+        console.log('[PROXY SOCKET EVENT] secureConnect: TLS handshake successfully completed.');
+      });
+      socketObj.on('end', () => {
+        console.log('[PROXY SOCKET EVENT] onEnd: FIN received from target protocol server.');
+        if (typeof onEnd === 'function') {
+          console.log('[PROXY EVENT] Executing custom onEnd handler');
+          onEnd(socketObj);
+        }
+      });
+      socketObj.on('error', (err) => {
+        console.error('[PROXY SOCKET EVENT] onError: Socket error encountered:', err.message);
+        if (typeof onError === 'function') {
+          console.log('[PROXY EVENT] Executing custom onError handler');
+          onError(err, socketObj);
+        }
+      });
+      socketObj.on('close', (hadError) => {
+        console.log(`[PROXY SOCKET EVENT] onClose: Socket closed (hadError: ${hadError})`);
+        if (typeof onClose === 'function') {
+          console.log('[PROXY EVENT] Executing custom onClose handler');
+          onClose(hadError, socketObj);
+        }
+        if (typeof onDestroy === 'function') {
+          console.log('[PROXY EVENT] onDestroy: Cleaning up socket resources');
+          onDestroy(hadError, socketObj);
+        }
+      });
     }
-    throw err;
-  }
-};
 
+    console.log('[PROXY EVENT] onProcessing: Sending protocol request payload through protocol client');
+    protocolClient.sendProtocolRequestPayload(httpRequestDetails)
+      .then((response) => {
+        console.log('[PROXY EVENT] onResponse: Successfully received response payload from protocol client');
+        let finalRes = response;
+        if (typeof onResponse === 'function') {
+          console.log('[PROXY EVENT] Executing custom onResponse handler');
+          const temp = onResponse(finalRes, httpRequestDetails);
+          if (temp !== undefined) finalRes = temp;
+        }
+
+        let rawBody = finalRes.body !== undefined ? finalRes.body : finalRes;
+        if (Buffer.isBuffer(rawBody)) {
+          rawBody = rawBody.toString('utf-8');
+        }
+
+        let parsedBody = rawBody;
+        if (typeof rawBody === 'string' && rawBody.trim().length > 0) {
+          try {
+            parsedBody = JSON.parse(rawBody);
+          } catch (_) {
+            parsedBody = rawBody;
+          }
+        }
+
+        const formattedResult = {
+          status: finalRes.status || 200,
+          headers: finalRes.headers || { 'content-type': 'application/json' },
+          body: parsedBody
+        };
+
+        if (typeof protocolClient.close === 'function') {
+          protocolClient.close();
+        }
+        resolve(formattedResult);
+      })
+      .catch((err) => {
+        console.error('[PROXY ERROR] Request payload dispatch failed:', err.message);
+        if (typeof onError === 'function') {
+          onError(err, socketObj);
+        }
+        if (typeof protocolClient.close === 'function') {
+          protocolClient.close();
+        }
+        reject(err);
+      });
+  });
+}
 // ============================================================================
 // HELPER & UTILITY FUNCTIONS (Framing & Parsing)
 // ============================================================================
 
-/**
- * Frames a buffer by prepending a 4-byte big-endian length header.
- * @param {Buffer} buffer - Raw payload buffer.
- * @returns {Buffer} Framed message buffer.
- */
 function frameStreamMessage(buffer) {
   const lengthBuffer = Buffer.alloc(4);
   lengthBuffer.writeUInt32BE(buffer.length, 0);
   return Buffer.concat([lengthBuffer, buffer]);
 }
 
-/**
- * Parses framed stream messages from a buffer store and invokes callback on each complete message.
- * @param {Buffer} bufferStore - Accumulated input buffer.
- * @param {Function} onMessage - Callback receiving parsed message buffers.
- * @returns {Buffer} Remaining unparsed buffer.
- */
 function parseStreamFrames(bufferStore, onMessage) {
   while (bufferStore.length >= 4) {
     const messageLength = bufferStore.readUInt32BE(0);
@@ -357,14 +433,6 @@ function parseStreamFrames(bufferStore, onMessage) {
 const frameMessage = frameStreamMessage;
 const parseFrames = parseStreamFrames;
 
-/**
- * Constructs a WebSocket frame from a payload buffer.
- * @param {Buffer} payloadBuffer - Message payload.
- * @param {boolean} [isFinal=true] - Whether this is the final frame.
- * @param {number} [opcode=0x01] - Frame opcode.
- * @param {boolean} [isMasked=false] - Whether to mask payload.
- * @returns {Buffer} Formatted WebSocket frame buffer.
- */
 function buildWsFrame(payloadBuffer, isFinal = true, opcode = 0x01, isMasked = false) {
   const payloadLength = payloadBuffer.length;
   let headerLength = 2;
@@ -411,12 +479,6 @@ function buildWsFrame(payloadBuffer, isFinal = true, opcode = 0x01, isMasked = f
   return frame;
 }
 
-/**
- * Parses incoming WebSocket frames from a buffer.
- * @param {Buffer} buffer - Input buffer stream.
- * @param {Function} onFrame - Callback for each parsed frame.
- * @returns {Buffer} Remaining unparsed buffer.
- */
 function parseWsFrames(buffer, onFrame) {
   let offset = 0;
 
@@ -467,17 +529,7 @@ function parseWsFrames(buffer, onFrame) {
   return buffer.slice(offset);
 }
 
-// ============================================================================
-// HANDLER RESOLUTION HELPER
-// ============================================================================
-
-/**
- * Standardizes and resolves lifecycle handler options across servers and clients.
- * @param {Object} [options={}] - Configuration options object.
- * @param {Function|Object} [handlerArg] - Handler function or mapping object.
- * @returns {Object} Normalized handlers mapping.
- */
-function resolveHandlers(options = {}, handlerArg) {
+function resolveLifeCycleHandlers(options = {}, handlerArg) {
   const handlers = typeof handlerArg === 'function' ? { onData: handlerArg } : (handlerArg || {});
   return {
     onConnection: options.onConnection || handlers.onConnection || options.onConnect || handlers.onConnect,
@@ -498,17 +550,11 @@ function resolveHandlers(options = {}, handlerArg) {
 // SERVER CREATORS FOR OTHER PROTOCOLS
 // ============================================================================
 
-/**
- * Creates and starts a UDP server instance.
- * @param {Object} [options={}] - Server options (host, port, socketType).
- * @param {Function|Object} [handlerArg] - Message/event handlers.
- * @returns {{server: dgram.Socket, close: Function}} UDP server wrapper object.
- */
 function createUdpServer(options = {}, handlerArg) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 41234;
   
-  const handlers = resolveHandlers(options, handlerArg);
+  const handlers = resolveLifeCycleHandlers(options, handlerArg);
   const onConnect = handlers.onConnect || handlers.onConnection;
   const onData = handlers.onData || handlers.onMessage || handlers.onMessageReceived;
   const onClose = handlers.onClose;
@@ -569,14 +615,6 @@ function createUdpServer(options = {}, handlerArg) {
   };
 }
 
-/**
- * Sets up stream parsing and event handling for a raw socket connection (TCP/TLS/Unix Socket).
- * @param {net.Socket|tls.TLSSocket} socket - Connected socket instance.
- * @param {net.Server} server - Parent server instance.
- * @param {Object} handlers - Lifecycle handlers.
- * @param {Function} onError - Error handler.
- * @param {Function} onDestroy - Destroy/cleanup handler.
- */
 function setupStreamServerConnection(socket, server, handlers, onError, onDestroy) {
   const onConnect = handlers.onConnect || handlers.onConnection;
   const onData = handlers.onData || handlers.onMessage;
@@ -643,17 +681,11 @@ function setupStreamServerConnection(socket, server, handlers, onError, onDestro
   });
 }
 
-/**
- * Creates and starts a TCP server instance.
- * @param {Object} [options={}] - Server options (host, port).
- * @param {Function|Object} [handlerArg] - Request/data handlers.
- * @returns {{server: net.Server, close: Function}} TCP server wrapper object.
- */
 function createTcpServer(options = {}, handlerArg) {
   const port = options.port || 7000;
   const host = options.host || '127.0.0.1';
   
-  const handlers = resolveHandlers(options, handlerArg);
+  const handlers = resolveLifeCycleHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
   const onDestroy = options.onDestroy || handlers.onDestroy;
 
@@ -686,17 +718,11 @@ function createTcpServer(options = {}, handlerArg) {
   };
 }
 
-/**
- * Creates and starts a TLS server instance.
- * @param {Object} [options={}] - Server options (key, cert, port, host).
- * @param {Function|Object} [handlerArg] - Request/data handlers.
- * @returns {{server: tls.Server, close: Function}} TLS server wrapper object.
- */
 function createTlsServer(options = {}, handlerArg) {
   const port = options.port || 7001;
   const host = options.host || '127.0.0.1';
   
-  const handlers = resolveHandlers(options, handlerArg);
+  const handlers = resolveLifeCycleHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
   const onDestroy = options.onDestroy || handlers.onDestroy;
 
@@ -736,11 +762,8 @@ function createTlsServer(options = {}, handlerArg) {
   };
 }
 
-/**
- * Handles WebSocket upgrade handshakes and frame parsing loops.
- */
 function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
-  const handlers = resolveHandlers(options, handlerArg);
+  const handlers = resolveLifeCycleHandlers(options, handlerArg);
   const onConnect = handlers.onConnect || handlers.onConnection;
   const onData = handlers.onData || handlers.onMessage;
   const onClose = handlers.onClose;
@@ -840,16 +863,10 @@ function handleWsUpgrade(req, socket, head, options = {}, handlerArg, server) {
   });
 }
 
-/**
- * Creates and starts a WebSocket server instance.
- * @param {Object} [options={}] - Server options.
- * @param {Function|Object} [handlerArg] - Handlers.
- * @returns {{server: http.Server, close: Function}} WS server wrapper.
- */
 function createWsServer(options = {}, handlerArg) {
   const port = options.port || 8081;
   const host = options.host || '127.0.0.1';
-  const handlers = resolveHandlers(options, handlerArg);
+  const handlers = resolveLifeCycleHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
   const onDestroy = options.onDestroy || handlers.onDestroy;
 
@@ -889,16 +906,10 @@ function createWsServer(options = {}, handlerArg) {
   };
 }
 
-/**
- * Creates and starts a Secure WebSocket (WSS) server instance.
- * @param {Object} [options={}] - Server options.
- * @param {Function|Object} [handlerArg] - Handlers.
- * @returns {{server: https.Server, close: Function}} WSS server wrapper.
- */
 function createWssServer(options = {}, handlerArg) {
   const port = options.port || 8443;
   const host = options.host || '127.0.0.1';
-  const handlers = resolveHandlers(options, handlerArg);
+  const handlers = resolveLifeCycleHandlers(options, handlerArg);
   const onError = options.onError || handlers.onError;
   const onDestroy = options.onDestroy || handlers.onDestroy;
 
@@ -996,18 +1007,12 @@ function createWssServer(options = {}, handlerArg) {
   };
 }
 
-/**
- * Creates and starts a Unix Domain Socket or Windows Named Pipe server instance.
- * @param {Object|string} [options={}] - Socket path or options object.
- * @param {Function|Object} [handlerArg] - Handlers.
- * @returns {{server: net.Server, close: Function}} Socket server wrapper.
- */
 function createSocketServer(options = {}, handlerArg) {
   const socketPath = typeof options === 'string'
     ? options
     : (options && (options.path || options.socketPath || (options.host && (options.host.includes('/') || options.host.includes('\\') || options.host.startsWith('.')) ? options.host : undefined))) || DEFAULT_SOCKET_PATH;
 
-  const handlers = resolveHandlers(typeof options === 'object' ? options : {}, handlerArg);
+  const handlers = resolveLifeCycleHandlers(typeof options === 'object' ? options : {}, handlerArg);
   const onError = options.onError || handlers.onError;
   const onDestroy = options.onDestroy || handlers.onDestroy;
 
@@ -1057,9 +1062,6 @@ function createSocketServer(options = {}, handlerArg) {
 // CLIENT CREATORS FOR ALL PROTOCOLS
 // ============================================================================
 
-/**
- * Creates a UDP client capable of sending framed protocol request payloads.
- */
 function createUdpClient(options = {}, genericClientHandler) {
   const targetHost = options.host || '127.0.0.1';
   const targetPort = options.port || 41234;
@@ -1123,9 +1125,6 @@ function createUdpClient(options = {}, genericClientHandler) {
   };
 }
 
-/**
- * Base creator for streaming socket clients (TCP, TLS, Unix Sockets).
- */
 function createBaseStreamClient(connectFn, genericClientHandler) {
   let socket = null;
   const pendingRequests = new Map();
@@ -1220,18 +1219,12 @@ function createBaseStreamClient(connectFn, genericClientHandler) {
   };
 }
 
-/**
- * Creates a TCP client connection.
- */
 function createTcpClient(options = {}, genericClientHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 7000;
   return createBaseStreamClient(() => net.createConnection({ host, port }), genericClientHandler);
 }
 
-/**
- * Creates a TLS client connection.
- */
 function createTlsClient(options = {}, genericClientHandler) {
   const host = options.host || '127.0.0.1';
   const port = options.port || 7001;
@@ -1241,9 +1234,6 @@ function createTlsClient(options = {}, genericClientHandler) {
   }), genericClientHandler);
 }
 
-/**
- * Creates a Unix Domain Socket or Named Pipe client connection.
- */
 function createSocketClient(options = {}, genericClientHandler) {
   const socketPath = typeof options === 'string'
     ? options
@@ -1255,9 +1245,6 @@ function createSocketClient(options = {}, genericClientHandler) {
   );
 }
 
-/**
- * Creates an HTTP/HTTPS client wrapper.
- */
 function createHttpClient(options = {}, genericClientHandler) {
   return {
     sendProtocolRequestPayload: async function (httpRequestDetails) {
@@ -1293,9 +1280,6 @@ function createHttpClient(options = {}, genericClientHandler) {
   };
 }
 
-/**
- * Generic base client for WebSocket (WS/WSS).
- */
 function createGenericWsClient(isSecure, options = {}, genericClientHandler) {
   const pendingRequests = new Map();
   let requestIdCounter = 0;
@@ -1388,16 +1372,10 @@ function createGenericWsClient(isSecure, options = {}, genericClientHandler) {
   };
 }
 
-/**
- * Creates a WebSocket (WS) client connection.
- */
 function createWsClient(options, genericClientHandler) {
   return createGenericWsClient(false, options, genericClientHandler);
 }
 
-/**
- * Creates a Secure WebSocket (WSS) client connection.
- */
 function createWssClient(options, genericClientHandler) {
   return createGenericWsClient(true, options, genericClientHandler);
 }
@@ -1406,9 +1384,6 @@ function createWssClient(options, genericClientHandler) {
 // REVERSE PROXY ROUTER & STANDALONE PROXY TO PROTOCOL
 // ============================================================================
 
-/**
- * Forwards HTTP requests to arbitrary backend protocol clients.
- */
 async function httpProxyToProtocol(httpRequestDetails, options = {}) {
   let protocolClient;
   let createdInternally = false;
@@ -1495,9 +1470,6 @@ async function httpProxyToProtocol(httpRequestDetails, options = {}) {
   }
 }
 
-/**
- * Forwards UDP messages to arbitrary backend protocol clients.
- */
 async function udpProxyToProtocol(udpMessageDetails, options = {}) {
   let protocolClient;
   let createdInternally = false;
@@ -1596,13 +1568,10 @@ async function udpProxyToProtocol(udpMessageDetails, options = {}) {
 // HTTP / HTTPS SERVER ENGINE
 // ============================================================================
 
-/**
- * Creates an HTTP request handler middleware with authentication and lifecycle event support.
- */
 function createRequestHandler(options = {}, setProtocolClient = (client) => {
     activeProtocolClient = client;
   }, handlerArg) {
-  const { onConnect, onData, onClose, onEnd, onError, onDestroy } = resolveHandlers(options, handlerArg);
+  const { onConnect, onData, onClose, onEnd, onError, onDestroy } = resolveLifeCycleHandlers(options, handlerArg);
   
   const authenticate = options.authenticate !== undefined
     ? options.authenticate
@@ -1610,7 +1579,7 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
 
   const protocol = options.useHttps || (options.key && options.cert) ? 'https' : 'http';
   
-  const requestProcessor = handlerArg && typeof handlerArg === 'function' && handlerArg.name !== 'resolveHandlers' 
+  const requestProcessor = handlerArg && typeof handlerArg === 'function' && handlerArg.name !== 'resolveLifeCycleHandlers' 
     ? handlerArg 
     : (options.onData || options.requestHandler || options.proxyHandler || (options.protocol ? httpProxyToProtocol : null));
 
@@ -1762,12 +1731,6 @@ function createRequestHandler(options = {}, setProtocolClient = (client) => {
   };
 }
 
-/**
- * Creates and starts an HTTP or HTTPS server instance.
- * @param {Object} [options={}] - Server options.
- * @param {Function} [requestHandlerArg] - Custom request handler.
- * @returns {{server: http.Server|https.Server, close: Function, getProtocolClient: Function}} Server wrapper object.
- */
 function createHttpServer(options = {}, requestHandlerArg) {
   const port = options.httpPort || options.port || 8080;
   const isHttps = Boolean(options.useHttps || (options.key && options.cert));
@@ -1817,9 +1780,6 @@ function createHttpServer(options = {}, requestHandlerArg) {
   };
 }
 
-/**
- * Creates and starts an HTTPS server instance.
- */
 function createHttpsServer(options = {}, requestHandlerArg) {
   return createHttpServer({ ...options, useHttps: true }, requestHandlerArg);
 }
@@ -1828,13 +1788,10 @@ function createHttpsServer(options = {}, requestHandlerArg) {
 // UDP PROXY SERVER ENGINE
 // ============================================================================
 
-/**
- * Creates a UDP proxy server instance forwarding messages to backend protocols.
- */
 function createUdpProxyServer(options = {}, proxyHandler) {
   const host = options.udpHost || options.host || '127.0.0.1';
   const port = options.udpPort || options.port || 41234;
-  const handlers = resolveHandlers(options, proxyHandler);
+  const handlers = resolveLifeCycleHandlers(options, proxyHandler);
   const onConnect = handlers.onConnect || handlers.onConnection;
   const onMessage = handlers.onMessage || handlers.onMessageReceived;
   const onData = handlers.onData || handlers.onResponseReceived;
@@ -1993,22 +1950,23 @@ module.exports = {
   // Constants
   DEFAULT_SOCKET_PATH,
 
-  // Direct Server / Request Handlers / Handlers / Clients
-  createHttpServer,
-  createHttpsServer,
+  // // Direct Server / Request Handlers / Handlers / Clients
+  // createHttpServer,
+  // createHttpsServer,
   createUdpProxyServer,
   createRequestHandler,
+  proxyToProtocol,
   httpProxyToProtocol,
   udpProxyToProtocol,
-  defaultProxyHandler,
-  httpProxyHandler,
+  // defaultProxyHandler,
   sendHttpRequest,
+  resolveLifeCycleHandlers,
 
-  // Certificate Helpers
-  generateSelfSignedCert,
-  getOrGenerateSelfSignedCert,
-  generateAndSaveCerts,
-  getCerts,
+  // // Certificate Helpers
+  // generateSelfSignedCert,
+  // getOrGenerateSelfSignedCert,
+  // generateAndSaveCerts,
+  // getCerts,
   certs: {
     generateSelfSignedCert,
     getOrGenerateSelfSignedCert,
@@ -2016,18 +1974,20 @@ module.exports = {
     getCerts
   },
 
-  // Framing Helpers
-  frameMessage,
-  parseFrames,
-  frameStreamMessage,
-  parseStreamFrames,
-  buildWsFrame,
-  parseWsFrames,
+  // // Framing Helpers
+  // frameMessage,
+  // parseFrames,
+  // frameStreamMessage,
+  // parseStreamFrames,
+  // buildWsFrame,
+  // parseWsFrames,
   framing: {
     frameMessage,
     parseFrames,
     frameStreamMessage,
-    parseStreamFrames
+    parseStreamFrames,
+    buildWsFrame,
+    parseWsFrames
   },
 
   // Server Creators

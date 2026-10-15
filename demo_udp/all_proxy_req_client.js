@@ -31,7 +31,7 @@ async function runSimpleUdpClient() {
 
   try {
     console.log('[Simple UDP Client] Sending payload: "hello server this is client"...');
-    const result = await client.sendHttpRequestPayload(requestPayload, 5000);
+    const result = await client.sendProtocolRequestPayload(requestPayload, 5000);
     
     console.log('[Simple UDP Client] Response received successfully:');
     console.log(JSON.stringify(result, null, 2));

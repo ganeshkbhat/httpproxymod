@@ -1,5 +1,5 @@
 const dgram = require('dgram');
-const { createHttpServer, getOrGenerateSelfSignedCert } = require('../index');
+const { servers: {http: createHttpServer }, certs: { getOrGenerateSelfSignedCert } } = require('../index');
 
 const PROXY_PORT = 41210;
 const TARGET_PORT = 8005;

@@ -23,7 +23,7 @@ async function runUdpProxyClient() {
 
   try {
     console.log('[UDP Proxy Client] Sending request payload...');
-    const result = await client.sendHttpRequestPayload(requestPayload, 5000);
+    const result = await client.sendProtocolRequestPayload(requestPayload, 5000);
     console.log('[UDP Proxy Client] Received response:', result);
   } catch (err) {
     console.error('[UDP Proxy Client] Request failed:', err.message);

@@ -1,7 +1,7 @@
 const https = require('https');
 const { expect } = require('chai');
 const { proxyToProtocol } = require('../demo_http/proxy_https');
-const { generateSelfSignedCert } = require('../index');
+const { certs: { generateSelfSignedCert } } = require('../index');
 
 const TARGET_PORT = 8002;
 
