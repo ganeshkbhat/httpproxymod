@@ -1964,7 +1964,8 @@ module.exports = {
     resolveLifeCycleHandlers,
     sendHttpRequest,
     createRequestHandler,
-    proxyToProtocol
+    proxyToProtocol,
+    genericProxyToProtocol: proxyToProtocol
   },
 
   // // Certificate Helpers

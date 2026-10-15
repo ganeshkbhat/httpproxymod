@@ -1,7 +1,8 @@
-const { servers: { tls: createTlsServer }, certs: { getOrGenerateSelfSignedCert } } = require('../index');
+const { servers: { tls: createTlsServer }, certs: { getOrGenerateSelfSignedCert }, helpers: { resolveLifeCycleHandlers } } = require('../index');
 
 function createTlsServerWrapper(port = 9002, customHandlers = {}) {
   const certs = getOrGenerateSelfSignedCert();
+  const handlers = resolveLifeCycleHandlers(customHandlers);
 
   const serverInstance = createTlsServer({
     port: port,
@@ -9,62 +10,42 @@ function createTlsServerWrapper(port = 9002, customHandlers = {}) {
     key: certs.key,
     cert: certs.cert,
     rejectUnauthorized: false,
-    onConnection: (socket, server) => {
-      if (typeof customHandlers.onConnection === 'function') {
-        customHandlers.onConnection(socket, server);
-      } else if (typeof customHandlers.onConnect === 'function') {
-        customHandlers.onConnect(socket, server);
-      }
-    },
-    onConnect: (socket, server) => {
-      if (typeof customHandlers.onConnect === 'function') {
-        customHandlers.onConnect(socket, server);
-      } else if (typeof customHandlers.onConnection === 'function') {
-        customHandlers.onConnection(socket, server);
-      }
-    },
+    onConnect: handlers.onConnect,
+    onConnection: handlers.onConnection,
     onData: async (requestData, socket, server, packet) => {
-      if (typeof customHandlers.onData === 'function') {
-        return await customHandlers.onData(requestData, socket, server, packet);
-      } else if (typeof customHandlers.onMessage === 'function') {
-        return await customHandlers.onMessage(requestData, socket, server, packet);
+      let data = requestData;
+      if (typeof handlers.onData === 'function') {
+        data = await handlers.onData(data, socket, server, packet);
       }
-      return requestData;
+      return data;
     },
     onMessage: async (requestData, socket, server, packet) => {
-      if (typeof customHandlers.onMessage === 'function') {
-        return await customHandlers.onMessage(requestData, socket, server, packet);
-      } else if (typeof customHandlers.onData === 'function') {
-        return await customHandlers.onData(requestData, socket, server, packet);
+      let data = requestData;
+      if (typeof handlers.onMessage === 'function') {
+        data = await handlers.onMessage(data, socket, server, packet);
       }
-      return requestData;
-    },
-    onResponse: (response, requestDetails) => {
-      if (typeof customHandlers.onResponse === 'function') {
-        return customHandlers.onResponse(response, requestDetails);
-      } else if (typeof customHandlers.onResponseReceived === 'function') {
-        return customHandlers.onResponseReceived(response, requestDetails);
-      }
-      return response;
+      return data;
     },
     onEnd: (socket, server) => {
-      if (typeof customHandlers.onEnd === 'function') {
-        customHandlers.onEnd(socket, server);
+      if (typeof handlers.onEnd === 'function') {
+        handlers.onEnd(socket, server);
       }
     },
     onError: (err, messageBuffer, socket, server) => {
-      if (typeof customHandlers.onError === 'function') {
-        customHandlers.onError(err, messageBuffer, socket, server);
+      if (typeof handlers.onError === 'function') {
+        handlers.onError(err, messageBuffer, socket, server);
+      } else {
+        console.error('[TLS Server Error]:', err.message);
       }
     },
     onClose: (hadError, socket, server) => {
-      if (typeof customHandlers.onClose === 'function') {
-        customHandlers.onClose(hadError, socket, server);
+      if (typeof handlers.onClose === 'function') {
+        handlers.onClose(hadError, socket, server);
       }
     },
     onDestroy: (socket, server) => {
-      if (typeof customHandlers.onDestroy === 'function') {
-        customHandlers.onDestroy(socket, server);
+      if (typeof handlers.onDestroy === 'function') {
+        handlers.onDestroy(socket, server);
       }
     }
   });

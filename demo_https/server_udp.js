@@ -1,33 +1,28 @@
-const { servers: { udp: createUdpServer } } = require('../index');
+const { servers: { udp: createUdpServer }, helpers: { resolveLifeCycleHandlers } } = require('../index');
 
-/**
- * Creates and starts a target UDP server wrapper supporting all lifecycle event handlers.
- */
 function createUdpServerWrapper(port = 9003, customHandlers = {}) {
+  const handlers = resolveLifeCycleHandlers(customHandlers);
+
   const serverInstance = createUdpServer({
     port: port,
     host: '127.0.0.1',
     onConnect: (server) => {
       console.log(`[UDP Target Server] Listening and ready on port ${port}`);
-      if (typeof customHandlers.onConnect === 'function') {
-        customHandlers.onConnect(server);
-      } else if (typeof customHandlers.onConnection === 'function') {
-        customHandlers.onConnection(server);
+      if (typeof handlers.onConnect === 'function') {
+        handlers.onConnect(server);
       }
     },
     onConnection: (server) => {
-      if (typeof customHandlers.onConnection === 'function') {
-        customHandlers.onConnection(server);
-      } else if (typeof customHandlers.onConnect === 'function') {
-        customHandlers.onConnect(server);
+      if (typeof handlers.onConnection === 'function') {
+        handlers.onConnection(server);
       }
     },
     onData: async (msg, rinfo, server) => {
       let data = msg;
-      if (typeof customHandlers.onData === 'function') {
-        data = await customHandlers.onData(data, rinfo, server);
-      } else if (typeof customHandlers.onMessage === 'function') {
-        data = await customHandlers.onMessage(data, rinfo, server);
+      if (typeof handlers.onData === 'function') {
+        data = await handlers.onData(data, rinfo, server);
+      } else if (typeof handlers.onMessage === 'function') {
+        data = await handlers.onMessage(data, rinfo, server);
       }
 
       let parsedPayload = {};
@@ -54,39 +49,40 @@ function createUdpServerWrapper(port = 9003, customHandlers = {}) {
       };
 
       server.send(Buffer.from(JSON.stringify(responseObj)), rinfo.port, rinfo.address, (err) => {
-        if (err && typeof customHandlers.onError === 'function') {
-          customHandlers.onError(err, msg, rinfo, server);
+        if (err && typeof handlers.onError === 'function') {
+          handlers.onError(err, msg, rinfo, server);
         }
       });
     },
     onMessage: async (msg, rinfo, server) => {
-      if (typeof customHandlers.onMessage === 'function') {
-        return await customHandlers.onMessage(msg, rinfo, server);
-      } else if (typeof customHandlers.onData === 'function') {
-        return await customHandlers.onData(msg, rinfo, server);
+      let data = msg;
+      if (typeof handlers.onMessage === 'function') {
+        data = await handlers.onMessage(data, rinfo, server);
+      } else if (typeof handlers.onData === 'function') {
+        data = await handlers.onData(data, rinfo, server);
       }
-      return msg;
+      return data;
     },
     onError: (err, msg, rinfo, server) => {
-      if (typeof customHandlers.onError === 'function') {
-        customHandlers.onError(err, msg, rinfo, server);
+      if (typeof handlers.onError === 'function') {
+        handlers.onError(err, msg, rinfo, server);
       } else {
-        console.error('[UDP Target Server Error]:', err.message);
+        console.error('[UDP Server Error]:', err.message);
       }
     },
     onClose: (server) => {
-      if (typeof customHandlers.onClose === 'function') {
-        customHandlers.onClose(server);
+      if (typeof handlers.onClose === 'function') {
+        handlers.onClose(server);
       }
     },
     onEnd: (server) => {
-      if (typeof customHandlers.onEnd === 'function') {
-        customHandlers.onEnd(server);
+      if (typeof handlers.onEnd === 'function') {
+        handlers.onEnd(server);
       }
     },
     onDestroy: (server) => {
-      if (typeof customHandlers.onDestroy === 'function') {
-        customHandlers.onDestroy(server);
+      if (typeof handlers.onDestroy === 'function') {
+        handlers.onDestroy(server);
       }
     }
   });
@@ -95,8 +91,8 @@ function createUdpServerWrapper(port = 9003, customHandlers = {}) {
   serverInstance.close = (callback) => {
     if (serverInstance.server) {
       serverInstance.server.close(() => {
-        if (typeof customHandlers.onDestroy === 'function') {
-          customHandlers.onDestroy(serverInstance.server);
+        if (typeof handlers.onDestroy === 'function') {
+          handlers.onDestroy(serverInstance.server);
         }
         if (typeof callback === 'function') callback();
       });

@@ -1,21 +1,21 @@
-const { servers: { tcp: createTcpServer }, framing: { parseStreamFrames, frameStreamMessage } } = require('../index');
+const { servers: { tcp: createTcpServer } } = require('../index');
 
 function createTcpServerWrapper(port = 9001, customHandlers = {}) {
   const serverInstance = createTcpServer({
     port: port,
     host: '127.0.0.1',
-    onConnection: (socket, server) => {
-      if (typeof customHandlers.onConnection === 'function') {
-        customHandlers.onConnection(socket, server);
-      } else if (typeof customHandlers.onConnect === 'function') {
-        customHandlers.onConnect(socket, server);
-      }
-    },
     onConnect: (socket, server) => {
       if (typeof customHandlers.onConnect === 'function') {
         customHandlers.onConnect(socket, server);
       } else if (typeof customHandlers.onConnection === 'function') {
         customHandlers.onConnection(socket, server);
+      }
+    },
+    onConnection: (socket, server) => {
+      if (typeof customHandlers.onConnection === 'function') {
+        customHandlers.onConnection(socket, server);
+      } else if (typeof customHandlers.onConnect === 'function') {
+        customHandlers.onConnect(socket, server);
       }
     },
     onData: async (requestData, socket, server, packet) => {
