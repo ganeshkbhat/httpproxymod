@@ -1,4 +1,4 @@
-const { proxyToProtocol: genericProxyToProtocol, clients: { udp: udpProtocolClientHandler }, servers : { https: createHttpServer }, certs: { getOrGenerateSelfSignedCert } } = require('../index');
+const { helpers :  { proxyToProtocol: genericProxyToProtocol }, clients: { udp: udpProtocolClientHandler }, servers : { https: createHttpServer }, certs: { getOrGenerateSelfSignedCert } } = require('../index');
 
 const PROXY_PORT = 41211;
 const TARGET_PORT = 9003;

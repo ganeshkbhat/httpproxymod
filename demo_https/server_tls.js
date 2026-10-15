@@ -1,4 +1,4 @@
-const { servers: { tls: createTlsServer }, getOrGenerateSelfSignedCert } = require('../index');
+const { servers: { tls: createTlsServer }, certs: { getOrGenerateSelfSignedCert } } = require('../index');
 
 function createTlsServerWrapper(port = 9002, customHandlers = {}) {
   const certs = getOrGenerateSelfSignedCert();

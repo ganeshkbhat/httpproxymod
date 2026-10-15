@@ -1,4 +1,4 @@
-const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
+const { servers: {  udpProxy: createUdpProxyServer }, proxy : { udpProxyToProtocol } } = require('../index.js');
 
 /**
  * UDP to HTTPS Proxy Server Demo using udpProxyToProtocol

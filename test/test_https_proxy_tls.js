@@ -1,6 +1,6 @@
 const assert = require('assert');
 const http = require('http');
-const { sendHttpRequest } = require('../index');
+const { helpers: { sendHttpRequest } } = require('../index');
 const { createTlsServer: startTlsServer } = require('../demo_https/server_tls');
 const { proxyToProtocol } = require('../demo_https/proxy_tls');
 

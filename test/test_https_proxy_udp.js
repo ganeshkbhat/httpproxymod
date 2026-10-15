@@ -1,6 +1,6 @@
 const { describe, it, before, after } = require('mocha');
 const { expect } = require('chai');
-const { sendHttpRequest } = require('../index');
+const { helpers: { sendHttpRequest } } = require('../index');
 const { createUdpServer } = require('../demo_https/server_udp');
 const { startProxyServer } = require('../demo_https/proxy_udp');
 

@@ -1,4 +1,6 @@
-const { createUdpProxyServer, udpProxyToProtocol, DEFAULT_SOCKET_PATH } = require('../index.js');
+const { DEFAULT_SOCKET_PATH } = require('../index.js');
+const { helpers: {  createUdpProxyServer }, proxy : { udpProxyToProtocol } } = require('../index.js');
+
 const fs = require('fs');
 
 /**

@@ -1953,14 +1953,19 @@ module.exports = {
   // // Direct Server / Request Handlers / Handlers / Clients
   // createHttpServer,
   // createHttpsServer,
-  createUdpProxyServer,
-  createRequestHandler,
-  proxyToProtocol,
-  httpProxyToProtocol,
-  udpProxyToProtocol,
+  // createUdpProxyServer,
+  // createRequestHandler,
+  // proxyToProtocol,
+  // httpProxyToProtocol,
+  // udpProxyToProtocol,
   // defaultProxyHandler,
-  sendHttpRequest,
-  resolveLifeCycleHandlers,
+  // sendHttpRequest,
+  helpers: { 
+    resolveLifeCycleHandlers,
+    sendHttpRequest,
+    createRequestHandler,
+    proxyToProtocol
+  },
 
   // // Certificate Helpers
   // generateSelfSignedCert,
@@ -2015,5 +2020,11 @@ module.exports = {
     wss: createWssClient,
     socket: createSocketClient,
     unix: createSocketClient
+  },
+
+  proxy: {
+    http: httpProxyToProtocol,
+    https: httpProxyToProtocol,
+    udp: udpProxyToProtocol
   }
 };

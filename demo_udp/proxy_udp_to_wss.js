@@ -1,4 +1,5 @@
-const { createUdpProxyServer, udpProxyToProtocol } = require('../index.js');
+const { helpers: {  createUdpProxyServer }, proxy : { udpProxyToProtocol } } = require('../index.js');
+
 
 /**
  * UDP to Secure WebSocket (WSS) Proxy Server Demo using udpProxyToProtocol

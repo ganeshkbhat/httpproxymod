@@ -1,7 +1,8 @@
 const {
-  certs: {getCerts},
-  createUdpProxyServer
+  certs: {getCerts}  
 } = require('../index.js');
+const { servers: {  udpProxy: createUdpProxyServer } } = require('../index.js');
+
 
 function startUdpProxyServer(udpPortOrOptions = 41210, tlsPortOrHandlers = 8004, tlsHost = '127.0.0.1') {
   const certs = getCerts();
